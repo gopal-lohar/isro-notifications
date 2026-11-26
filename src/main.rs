@@ -75,24 +75,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let bind = std::env::var("ANALYTICS_BIND").unwrap_or_else(|_| "127.0.0.1:8080".into());
     if !bind.trim().is_empty() {
-        match bind.parse::<std::net::SocketAddr>() {
-            Ok(addr) => match tokio::net::TcpListener::bind(addr).await {
-                Ok(listener) => {
-                    let state = WebState {
-                        analytics: analytics.clone(),
-                        telegram: telegram.clone(),
-                        admin_username: config.telegram.admin_username.clone(),
-                    };
-                    tokio::spawn(async move {
-                        if let Err(error) = web::serve(listener, state).await {
-                            error!(%error, "analytics server stopped");
-                        }
-                    });
-                    info!(%addr, "analytics server listening");
-                }
-                Err(error) => error!(%error, %addr, "analytics bind failed"),
-            },
-            Err(error) => error!(%error, "invalid ANALYTICS_BIND"),
+        match tokio::net::TcpListener::bind(bind.as_str()).await {
+            Ok(listener) => {
+                let addr = listener
+                    .local_addr()
+                    .map(|addr| addr.to_string())
+                    .unwrap_or_else(|_| bind.clone());
+                let state = WebState {
+                    analytics: analytics.clone(),
+                    telegram: telegram.clone(),
+                    admin_username: config.telegram.admin_username.clone(),
+                };
+                tokio::spawn(async move {
+                    if let Err(error) = web::serve(listener, state).await {
+                        error!(%error, "analytics server stopped");
+                    }
+                });
+                info!(%addr, "analytics server listening");
+            }
+            Err(error) => error!(%error, %bind, "analytics bind failed"),
         }
     }
 

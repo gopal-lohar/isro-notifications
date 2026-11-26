@@ -84,7 +84,7 @@ Logs go to stderr. Use `RUST_LOG=debug` for more.
 
 ## Analytics
 
-`http://127.0.0.1:8080` by default. Set `ANALYTICS_BIND` to change the address, or to an empty value to disable it.
+`http://127.0.0.1:8080` by default. Set `ANALYTICS_BIND` to change the address (IP or hostname, e.g. a Tailscale MagicDNS name), or to an empty value to disable it.
 
 ## Smoke test
 
