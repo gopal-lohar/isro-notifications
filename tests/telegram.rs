@@ -12,7 +12,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
 type Routes = Arc<Mutex<HashMap<String, (u16, String)>>>;
-type LastRequest = Arc<Mutex<Option<Captured>>>;
+type Requests = Arc<Mutex<Vec<Captured>>>;
 
 #[derive(Clone, Default)]
 struct Captured {
@@ -31,7 +31,7 @@ fn routes(entries: impl IntoIterator<Item = (&'static str, (u16, &'static str))>
 }
 
 /// Minimal Telegram API stand-in, routed by the last path segment.
-async fn serve(routes: Routes, last: LastRequest) -> SocketAddr {
+async fn serve(routes: Routes, last: Requests) -> SocketAddr {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {
@@ -76,7 +76,7 @@ async fn serve(routes: Routes, last: LastRequest) -> SocketAddr {
                     body.extend_from_slice(&chunk[..n]);
                 }
 
-                *last.lock().unwrap() = Some(Captured {
+                last.lock().unwrap().push(Captured {
                     method,
                     path: path.clone(),
                     body: String::from_utf8_lossy(&body).to_string(),
@@ -167,7 +167,7 @@ async fn poll_updates_registers_chat() {
             r#"{"ok":true,"result":[{"update_id":10,"message":{"chat":{"id":42,"username":"alice","first_name":"Alice","last_name":"Smith"}}}]}"#,
         ),
     )]);
-    let last: LastRequest = Arc::new(Mutex::new(None));
+    let last: Requests = Arc::new(Mutex::new(Vec::new()));
     let addr = serve(routes, last.clone()).await;
     let path = temp("poll");
     let telegram = telegram(addr, &path);
@@ -181,7 +181,7 @@ async fn poll_updates_registers_chat() {
     assert_eq!(registry.chats[0].username.as_deref(), Some("alice"));
     assert_eq!(registry.chats[0].name, "Alice Smith");
 
-    let captured = last.lock().unwrap().clone().unwrap();
+    let captured = last.lock().unwrap().last().cloned().unwrap();
     assert_eq!(captured.path, "/bottest-token/getUpdates?offset=0&timeout=0");
 
     std::fs::remove_file(&path).unwrap();
@@ -190,7 +190,7 @@ async fn poll_updates_registers_chat() {
 #[tokio::test]
 async fn deliver_sends_text_message() {
     let routes = routes([("sendMessage", (200, r#"{"ok":true,"result":{}}"#))]);
-    let last: LastRequest = Arc::new(Mutex::new(None));
+    let last: Requests = Arc::new(Mutex::new(Vec::new()));
     let addr = serve(routes, last.clone()).await;
     let path = temp("text");
     write_registry(&path, &[chat(42)]);
@@ -198,7 +198,7 @@ async fn deliver_sends_text_message() {
 
     telegram.deliver(&update(Vec::new())).await.unwrap();
 
-    let captured = last.lock().unwrap().clone().unwrap();
+    let captured = last.lock().unwrap().last().cloned().unwrap();
     assert_eq!(captured.method, "POST");
     assert!(captured.path.ends_with("/sendMessage"));
     assert!(captured.body.contains("\"chat_id\":42"));
@@ -211,7 +211,7 @@ async fn deliver_sends_text_message() {
 #[tokio::test]
 async fn deliver_sends_single_photo_with_caption() {
     let routes = routes([("sendPhoto", (200, r#"{"ok":true,"result":{}}"#))]);
-    let last: LastRequest = Arc::new(Mutex::new(None));
+    let last: Requests = Arc::new(Mutex::new(Vec::new()));
     let addr = serve(routes, last.clone()).await;
     let path = temp("photo");
     write_registry(&path, &[chat(42)]);
@@ -222,7 +222,7 @@ async fn deliver_sends_single_photo_with_caption() {
         .await
         .unwrap();
 
-    let captured = last.lock().unwrap().clone().unwrap();
+    let captured = last.lock().unwrap().last().cloned().unwrap();
     assert!(captured.path.ends_with("/sendPhoto"));
     assert!(captured.body.contains("\"photo\":\"https://example.com/a.webp\""));
     assert!(captured.body.contains("\"caption\":"));
@@ -233,7 +233,7 @@ async fn deliver_sends_single_photo_with_caption() {
 #[tokio::test]
 async fn deliver_groups_multiple_photos() {
     let routes = routes([("sendMediaGroup", (200, r#"{"ok":true,"result":[]}"#))]);
-    let last: LastRequest = Arc::new(Mutex::new(None));
+    let last: Requests = Arc::new(Mutex::new(Vec::new()));
     let addr = serve(routes, last.clone()).await;
     let path = temp("album");
     write_registry(&path, &[chat(42)]);
@@ -247,7 +247,7 @@ async fn deliver_groups_multiple_photos() {
         .await
         .unwrap();
 
-    let captured = last.lock().unwrap().clone().unwrap();
+    let captured = last.lock().unwrap().last().cloned().unwrap();
     assert!(captured.path.ends_with("/sendMediaGroup"));
     assert_eq!(captured.body.matches("\"type\":\"photo\"").count(), 2);
     assert!(captured.body.contains("\"caption\":"));
@@ -264,7 +264,7 @@ async fn blocked_chat_is_deactivated() {
             r#"{"ok":false,"description":"Forbidden: bot was blocked by the user"}"#,
         ),
     )]);
-    let last: LastRequest = Arc::new(Mutex::new(None));
+    let last: Requests = Arc::new(Mutex::new(Vec::new()));
     let addr = serve(routes, last).await;
     let path = temp("blocked");
     write_registry(&path, &[chat(42)]);
@@ -278,9 +278,51 @@ async fn blocked_chat_is_deactivated() {
 }
 
 #[tokio::test]
+async fn alert_goes_only_to_the_admin() {
+    let routes = routes([("sendMessage", (200, r#"{"ok":true,"result":{}}"#))]);
+    let last: Requests = Arc::new(Mutex::new(Vec::new()));
+    let addr = serve(routes, last.clone()).await;
+    let path = temp("alert");
+    write_registry(&path, &[chat(42), chat(99)]);
+    let mut config = TelegramConfig::new("test-token", &path);
+    config.api = format!("http://{addr}");
+    config.admin_chat_id = Some(99);
+    let telegram = Telegram::new(reqwest::Client::new(), config);
+
+    telegram.alert("fetch failed: HTTP 503").await.unwrap();
+
+    let captured = last.lock().unwrap().last().cloned().unwrap();
+    assert!(captured.path.ends_with("/sendMessage"));
+    assert!(captured.body.contains("\"chat_id\":99"));
+    assert!(!captured.body.contains("\"chat_id\":42"));
+    assert!(captured.body.contains("fetch failed: HTTP 503"));
+
+    std::fs::remove_file(&path).unwrap();
+}
+
+#[tokio::test]
+async fn deliver_broadcasts_to_every_active_chat() {
+    let routes = routes([("sendMessage", (200, r#"{"ok":true,"result":{}}"#))]);
+    let last: Requests = Arc::new(Mutex::new(Vec::new()));
+    let addr = serve(routes, last.clone()).await;
+    let path = temp("broadcast");
+    write_registry(&path, &[chat(42), chat(99)]);
+    let telegram = telegram(addr, &path);
+
+    telegram.deliver(&update(Vec::new())).await.unwrap();
+
+    let requests = last.lock().unwrap().clone();
+    assert_eq!(requests.len(), 2);
+    assert!(requests.iter().any(|r| r.body.contains("\"chat_id\":42")));
+    assert!(requests.iter().any(|r| r.body.contains("\"chat_id\":99")));
+
+    std::fs::remove_file(&path).unwrap();
+}
+
+#[tokio::test]
 async fn no_registered_chats_is_an_error() {
     let routes = routes([]);
-    let last: LastRequest = Arc::new(Mutex::new(None));
+    let last: Requests = Arc::new(Mutex::new(Vec::new()));
     let addr = serve(routes, last).await;
     let path = temp("empty");
     let telegram = telegram(addr, &path);

@@ -12,6 +12,7 @@ use tokio::net::TcpListener;
 #[derive(Clone)]
 struct Recording {
     delivered: Arc<Mutex<Vec<Update>>>,
+    alerts: Arc<Mutex<Vec<String>>>,
     fail: bool,
 }
 
@@ -19,12 +20,17 @@ impl Recording {
     fn new(fail: bool) -> Self {
         Self {
             delivered: Arc::new(Mutex::new(Vec::new())),
+            alerts: Arc::new(Mutex::new(Vec::new())),
             fail,
         }
     }
 
     fn delivered(&self) -> Vec<Update> {
         self.delivered.lock().unwrap().clone()
+    }
+
+    fn alerts(&self) -> Vec<String> {
+        self.alerts.lock().unwrap().clone()
     }
 }
 
@@ -40,6 +46,16 @@ impl Deliverer for Recording {
             } else {
                 Ok(())
             }
+        })
+    }
+
+    fn alert<'a>(
+        &'a self,
+        message: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>> {
+        Box::pin(async move {
+            self.alerts.lock().unwrap().push(message.to_string());
+            Ok(())
         })
     }
 }
@@ -144,6 +160,29 @@ async fn baseline_unchanged_and_failed_deliver_nothing() {
             .await
             .is_empty()
     );
+    assert!(rec.delivered().is_empty());
+}
+
+#[tokio::test]
+async fn failures_are_alerted() {
+    let rec = Recording::new(false);
+    let pipeline = pipeline(&rec, None, "https://www.isro.gov.in");
+
+    pipeline
+        .handle(FetchEvent::Failed {
+            error: "HTTP 503".into(),
+        })
+        .await;
+    assert_eq!(rec.alerts(), vec!["fetch failed: HTTP 503".to_string()]);
+
+    let blocked = b"<html><body>Access Denied</body></html>".to_vec();
+    pipeline
+        .handle(changed(page(&[("A", "https://example.com/a")]), blocked))
+        .await;
+
+    let alerts = rec.alerts();
+    assert_eq!(alerts.len(), 2);
+    assert!(alerts[1].starts_with("site failure:"), "{:?}", alerts[1]);
     assert!(rec.delivered().is_empty());
 }
 

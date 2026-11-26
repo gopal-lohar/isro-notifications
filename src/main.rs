@@ -40,6 +40,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             if let Ok(api) = std::env::var("TELEGRAM_API") {
                 config.api = api;
             }
+            config.admin_chat_id = std::env::var("TELEGRAM_ADMIN_CHAT_ID")
+                .ok()
+                .and_then(|value| value.parse().ok());
             Telegram::new(client.clone(), config)
         });
 

@@ -14,6 +14,14 @@ pub trait Deliverer: Send + Sync {
         &'a self,
         update: &'a Update,
     ) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>>;
+
+    /// Send a failure alert to the operator. Default: no-op.
+    fn alert<'a>(
+        &'a self,
+        _message: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>> {
+        Box::pin(async { Ok(()) })
+    }
 }
 
 /// Logs updates to the tracing output.
@@ -54,6 +62,12 @@ impl Pipeline {
         }
     }
 
+    async fn alert(&self, message: &str) {
+        if let Err(error) = self.deliverer.alert(message).await {
+            error!(%error, "alert delivery failed");
+        }
+    }
+
     /// Handle one poll result. Returns the updates that were produced.
     pub async fn handle(&self, event: FetchEvent) -> Vec<Update> {
         match event {
@@ -67,6 +81,7 @@ impl Pipeline {
             }
             FetchEvent::Failed { error } => {
                 error!(%error, "fetch failed");
+                self.alert(&format!("fetch failed: {error}")).await;
                 Vec::new()
             }
             FetchEvent::Changed { previous, current } => {
@@ -74,6 +89,7 @@ impl Pipeline {
                 match diff::compare(&previous.body, &current.body, &self.enrich.base_url) {
                     DiffEvent::Failure { message } => {
                         error!(%message, "site failure");
+                        self.alert(&format!("site failure: {message}")).await;
                         Vec::new()
                     }
                     DiffEvent::NoNews => {

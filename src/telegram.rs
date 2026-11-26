@@ -20,6 +20,8 @@ pub struct TelegramConfig {
     pub token: String,
     pub registry_path: PathBuf,
     pub api: String,
+    /// Chat that also receives failure alerts.
+    pub admin_chat_id: Option<i64>,
 }
 
 impl TelegramConfig {
@@ -28,6 +30,7 @@ impl TelegramConfig {
             token: token.into(),
             registry_path: registry_path.into(),
             api: DEFAULT_API.to_string(),
+            admin_chat_id: None,
         }
     }
 }
@@ -43,6 +46,7 @@ struct Inner {
     api: String,
     registry_path: PathBuf,
     registry: Mutex<Registry>,
+    admin_chat_id: Option<i64>,
 }
 
 impl Telegram {
@@ -55,6 +59,7 @@ impl Telegram {
                 api: config.api,
                 registry_path: config.registry_path,
                 registry: Mutex::new(registry),
+                admin_chat_id: config.admin_chat_id,
             }),
         }
     }
@@ -302,6 +307,20 @@ impl Deliverer for Telegram {
             } else {
                 Err(errors.join("; "))
             }
+        })
+    }
+
+    fn alert<'a>(
+        &'a self,
+        message: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>> {
+        Box::pin(async move {
+            let Some(chat_id) = self.inner.admin_chat_id else {
+                return Ok(());
+            };
+            self.send_message(chat_id, message)
+                .await
+                .map_err(|error| error.message)
         })
     }
 }
