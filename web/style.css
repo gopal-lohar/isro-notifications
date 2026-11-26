@@ -1,10 +1,10 @@
 :root {
   --bg: #000000;
-  --panel: #0b0b0c;
-  --panel-2: #121214;
+  --surface: #0d0d0f;
+  --surface-2: #17171a;
   --text: #f4f4f5;
   --muted: #8b8b93;
-  --border: #1e1e22;
+  --yellow: #ffd400;
   --accent: #5b8cff;
   --ok: #3ddc84;
   --bad: #ff5c5c;
@@ -14,11 +14,11 @@
 
 [data-theme="light"] {
   --bg: #ffffff;
-  --panel: #f7f7f8;
-  --panel-2: #ffffff;
+  --surface: #f2f2f3;
+  --surface-2: #e7e7ea;
   --text: #111114;
   --muted: #6b6b73;
-  --border: #e6e6ea;
+  --yellow: #c99700;
   --accent: #2563eb;
   --ok: #128a4a;
   --bad: #c62828;
@@ -41,9 +41,10 @@ body {
 header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 20px 24px;
-  border-bottom: 1px solid var(--border);
+  gap: 24px;
+  height: 56px;
+  padding: 0 24px;
+  background: var(--bg);
 }
 
 .brand {
@@ -54,7 +55,7 @@ header {
 
 .brand h1 {
   margin: 0;
-  font-size: 17px;
+  font-size: 16px;
   font-weight: 600;
   letter-spacing: -0.01em;
 }
@@ -62,22 +63,19 @@ header {
 .dot {
   width: 9px;
   height: 9px;
-  border-radius: 50%;
-  background: var(--accent);
-  box-shadow: 0 0 12px var(--accent);
+  background: var(--yellow);
 }
 
 nav {
   display: flex;
-  gap: 4px;
-  padding: 12px 24px;
-  border-bottom: 1px solid var(--border);
+  height: 100%;
+  margin-right: auto;
 }
 
 nav button {
-  padding: 8px 14px;
+  height: 100%;
+  padding: 0 14px;
   border: 0;
-  border-radius: 8px;
   background: none;
   color: var(--muted);
   font: inherit;
@@ -86,12 +84,11 @@ nav button {
 
 nav button:hover {
   color: var(--text);
-  background: var(--panel);
 }
 
 nav button.active {
   color: var(--text);
-  background: var(--panel-2);
+  border-bottom: 2px solid var(--yellow);
 }
 
 main {
@@ -108,9 +105,7 @@ main {
 
 .card {
   padding: 16px;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: var(--panel);
+  background: var(--surface);
 }
 
 .card.wide {
@@ -152,7 +147,6 @@ table {
 th,
 td {
   padding: 10px 8px;
-  border-bottom: 1px solid var(--border);
   text-align: left;
 }
 
@@ -164,8 +158,8 @@ th {
   letter-spacing: 0.06em;
 }
 
-tr:last-child td {
-  border-bottom: 0;
+tbody tr:nth-child(even) {
+  background: var(--surface-2);
 }
 
 .mono {
@@ -176,35 +170,29 @@ tr:last-child td {
 .tag {
   display: inline-block;
   padding: 2px 8px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
+  background: var(--surface-2);
   font-size: 11px;
   font-weight: 600;
 }
 
 .tag.admin {
   color: var(--accent);
-  border-color: var(--accent);
 }
 
 .tag.ok {
   color: var(--ok);
-  border-color: var(--ok);
 }
 
 .tag.bad {
   color: var(--bad);
-  border-color: var(--bad);
 }
 
 .tag.flash {
   color: var(--flash);
-  border-color: var(--flash);
 }
 
 .tag.latest {
   color: var(--latest);
-  border-color: var(--latest);
 }
 
 .list {
@@ -240,16 +228,14 @@ tr:last-child td {
 }
 
 .ghost {
-  padding: 7px 12px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: none;
+  padding: 8px 14px;
+  border: 0;
+  background: var(--surface);
   color: var(--text);
   font: inherit;
   cursor: pointer;
 }
 
 .ghost:hover {
-  border-color: var(--accent);
-  color: var(--accent);
+  background: var(--surface-2);
 }
