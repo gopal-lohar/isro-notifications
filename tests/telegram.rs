@@ -164,13 +164,16 @@ fn image(url: &str) -> Attachment {
 
 #[tokio::test]
 async fn poll_updates_registers_chat() {
-    let routes = routes([(
-        "getUpdates",
+    let routes = routes([
         (
-            200,
-            r#"{"ok":true,"result":[{"update_id":10,"message":{"chat":{"id":42,"username":"alice","first_name":"Alice","last_name":"Smith"}}}]}"#,
+            "getUpdates",
+            (
+                200,
+                r#"{"ok":true,"result":[{"update_id":10,"message":{"text":"/start","chat":{"id":42,"username":"alice","first_name":"Alice","last_name":"Smith"}}}]}"#,
+            ),
         ),
-    )]);
+        ("sendMessage", (200, r#"{"ok":true,"result":{}}"#)),
+    ]);
     let last: Requests = Arc::new(Mutex::new(Vec::new()));
     let addr = serve(routes, last.clone()).await;
     let path = temp("poll");
@@ -185,8 +188,11 @@ async fn poll_updates_registers_chat() {
     assert_eq!(registry.chats[0].username.as_deref(), Some("alice"));
     assert_eq!(registry.chats[0].name, "Alice Smith");
 
-    let captured = last.lock().unwrap().last().cloned().unwrap();
-    assert_eq!(captured.path, "/bottest-token/getUpdates?offset=0&timeout=0");
+    let requests = last.lock().unwrap().clone();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0].path, "/bottest-token/getUpdates?offset=0&timeout=0");
+    assert!(requests[1].path.ends_with("/sendMessage"));
+    assert!(requests[1].body.contains("You're subscribed"));
 
     std::fs::remove_file(&path).unwrap();
 }
@@ -206,7 +212,8 @@ async fn deliver_sends_text_message() {
     assert_eq!(captured.method, "POST");
     assert!(captured.path.ends_with("/sendMessage"));
     assert!(captured.body.contains("\"chat_id\":42"));
-    assert!(captured.body.contains("Title\\n\\nSummary."));
+    assert!(captured.body.contains("<b>Title</b>\\n\\nSummary."));
+    assert!(captured.body.contains("\"parse_mode\":\"HTML\""));
     assert!(captured.body.contains("https://www.isro.gov.in/story.html"));
 
     std::fs::remove_file(&path).unwrap();
@@ -230,6 +237,7 @@ async fn deliver_sends_single_photo_with_caption() {
     assert!(captured.path.ends_with("/sendPhoto"));
     assert!(captured.body.contains("\"photo\":\"https://example.com/a.webp\""));
     assert!(captured.body.contains("\"caption\":"));
+    assert!(captured.body.contains("\"parse_mode\":\"HTML\""));
 
     std::fs::remove_file(&path).unwrap();
 }
@@ -255,6 +263,7 @@ async fn deliver_groups_multiple_photos() {
     assert!(captured.path.ends_with("/sendMediaGroup"));
     assert_eq!(captured.body.matches("\"type\":\"photo\"").count(), 2);
     assert!(captured.body.contains("\"caption\":"));
+    assert!(captured.body.contains("\"parse_mode\":\"HTML\""));
 
     std::fs::remove_file(&path).unwrap();
 }
@@ -277,6 +286,26 @@ async fn blocked_chat_is_deactivated() {
     assert!(telegram.deliver(&update(Vec::new())).await.is_err());
     assert_eq!(telegram.active_chats(), 0);
     assert!(!Registry::load(&path).chats[0].active);
+
+    std::fs::remove_file(&path).unwrap();
+}
+
+#[tokio::test]
+async fn html_is_escaped_in_messages() {
+    let routes = routes([("sendMessage", (200, r#"{"ok":true,"result":{}}"#))]);
+    let last: Requests = Arc::new(Mutex::new(Vec::new()));
+    let addr = serve(routes, last.clone()).await;
+    let path = temp("escape");
+    write_registry(&path, &[chat(42)]);
+    let telegram = telegram(addr, &path);
+
+    let mut update = update(Vec::new());
+    update.text = "A & B\n\nC < D".to_string();
+    telegram.deliver(&update).await.unwrap();
+
+    let captured = last.lock().unwrap().last().cloned().unwrap();
+    assert!(captured.body.contains("<b>A &amp; B</b>"));
+    assert!(captured.body.contains("C &lt; D"));
 
     std::fs::remove_file(&path).unwrap();
 }

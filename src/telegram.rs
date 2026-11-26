@@ -14,6 +14,7 @@ use crate::registry::{Chat, Registry};
 
 pub const DEFAULT_API: &str = "https://api.telegram.org";
 const CAPTION_LIMIT: usize = 1024;
+const WELCOME: &str = "👋 You're subscribed. ISRO updates will arrive here.";
 const ALBUM_LIMIT: usize = 10;
 
 pub struct TelegramConfig {
@@ -93,56 +94,77 @@ impl Telegram {
 
         let mut added = 0;
         let mut changed = false;
-        let mut registry = self.inner.registry.lock().unwrap();
-        for update in body["result"].as_array().cloned().unwrap_or_default() {
-            if let Some(id) = update["update_id"].as_i64()
-                && id + 1 > registry.offset
-            {
-                registry.offset = id + 1;
-                changed = true;
+        let mut welcomes = Vec::new();
+        {
+            let mut registry = self.inner.registry.lock().unwrap();
+            for update in body["result"].as_array().cloned().unwrap_or_default() {
+                if let Some(id) = update["update_id"].as_i64()
+                    && id + 1 > registry.offset
+                {
+                    registry.offset = id + 1;
+                    changed = true;
+                }
+                let chat = &update["message"]["chat"];
+                let Some(chat_id) = chat["id"].as_i64() else {
+                    continue;
+                };
+                if update["message"]["text"]
+                    .as_str()
+                    .is_some_and(|text| text.trim().starts_with("/start"))
+                {
+                    welcomes.push(chat_id);
+                }
+                let name = [chat["first_name"].as_str(), chat["last_name"].as_str()]
+                    .into_iter()
+                    .flatten()
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                let entry = Chat {
+                    chat_id,
+                    username: chat["username"].as_str().map(str::to_string),
+                    name: if name.is_empty() {
+                        chat_id.to_string()
+                    } else {
+                        name
+                    },
+                    active: true,
+                };
+                if registry.upsert(entry) {
+                    added += 1;
+                    changed = true;
+                }
             }
-            let chat = &update["message"]["chat"];
-            let Some(chat_id) = chat["id"].as_i64() else {
-                continue;
-            };
-            let name = [chat["first_name"].as_str(), chat["last_name"].as_str()]
-                .into_iter()
-                .flatten()
-                .collect::<Vec<_>>()
-                .join(" ");
-            let entry = Chat {
-                chat_id,
-                username: chat["username"].as_str().map(str::to_string),
-                name: if name.is_empty() {
-                    chat_id.to_string()
-                } else {
-                    name
-                },
-                active: true,
-            };
-            if registry.upsert(entry) {
-                added += 1;
-                changed = true;
+            if changed {
+                registry
+                    .save(&self.inner.registry_path)
+                    .map_err(|e| format!("registry save: {e}"))?;
             }
         }
-        if changed {
-            registry
-                .save(&self.inner.registry_path)
-                .map_err(|e| format!("registry save: {e}"))?;
+
+        for chat_id in welcomes {
+            if let Err(error) = self.send_message(chat_id, WELCOME).await {
+                warn!(chat_id, "welcome message failed: {}", error.message);
+            }
         }
         Ok(added)
     }
 
     async fn send(&self, chat: &Chat, update: &Update) -> Result<(), SendError> {
         let text = compose_text(update);
-        let caption = (text.chars().count() <= CAPTION_LIMIT).then_some(text.as_str());
+        let plain_len = update.text.chars().count()
+            + update
+                .link
+                .as_ref()
+                .map(|link| link.chars().count() + 2)
+                .unwrap_or(0);
+        let caption = (plain_len <= CAPTION_LIMIT).then_some(text.as_str());
         if caption.is_none() {
-            self.send_message(chat.chat_id, &text).await?;
+            self.send_message_html(chat.chat_id, &text).await?;
         }
 
         if update.attachments.is_empty() {
             if caption.is_some() {
-                self.send_message(chat.chat_id, &text).await?;
+                self.send_message_html(chat.chat_id, &text).await?;
             }
             return Ok(());
         }
@@ -151,12 +173,24 @@ impl Telegram {
     }
 
     async fn send_message(&self, chat_id: i64, text: &str) -> Result<(), SendError> {
-        self.call(
-            "sendMessage",
-            json!({ "chat_id": chat_id, "text": text, "disable_web_page_preview": true }),
-        )
-        .await
-        .map(|_| ())
+        self.send_message_with(chat_id, text, None).await
+    }
+
+    async fn send_message_html(&self, chat_id: i64, text: &str) -> Result<(), SendError> {
+        self.send_message_with(chat_id, text, Some("HTML")).await
+    }
+
+    async fn send_message_with(
+        &self,
+        chat_id: i64,
+        text: &str,
+        parse_mode: Option<&str>,
+    ) -> Result<(), SendError> {
+        let mut body = json!({ "chat_id": chat_id, "text": text, "disable_web_page_preview": true });
+        if let Some(mode) = parse_mode {
+            body["parse_mode"] = json!(mode);
+        }
+        self.call("sendMessage", body).await.map(|_| ())
     }
 
     async fn send_media(
@@ -185,6 +219,7 @@ impl Telegram {
                     });
                     if index == 0 && i == 0 && let Some(caption) = caption {
                         item["caption"] = json!(caption);
+                        item["parse_mode"] = json!("HTML");
                     }
                     item
                 })
@@ -210,6 +245,7 @@ impl Telegram {
         body.insert(field.into(), json!(attachment.url));
         if let Some(caption) = caption {
             body.insert("caption".into(), json!(caption));
+            body.insert("parse_mode".into(), json!("HTML"));
         }
 
         match self.call(method, Value::Object(body)).await {
@@ -221,6 +257,7 @@ impl Telegram {
                 body.insert("document".into(), json!(attachment.url));
                 if let Some(caption) = caption {
                     body.insert("caption".into(), json!(caption));
+                    body.insert("parse_mode".into(), json!("HTML"));
                 }
                 self.call("sendDocument", Value::Object(body))
                     .await
@@ -356,10 +393,26 @@ impl SendError {
 }
 
 fn compose_text(update: &Update) -> String {
-    match &update.link {
-        Some(link) => format!("{}\n\n{}", update.text, link),
-        None => update.text.clone(),
+    let (title, rest) = match update.text.split_once("\n\n") {
+        Some((title, rest)) => (title, Some(rest)),
+        None => (update.text.as_str(), None),
+    };
+    let mut text = format!("<b>{}</b>", escape_html(title));
+    if let Some(rest) = rest {
+        text.push_str("\n\n");
+        text.push_str(&escape_html(rest));
     }
+    if let Some(link) = &update.link {
+        text.push_str("\n\n");
+        text.push_str(&escape_html(link));
+    }
+    text
+}
+
+fn escape_html(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 fn media_type(kind: AttachmentKind) -> &'static str {
