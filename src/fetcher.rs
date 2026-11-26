@@ -1,8 +1,10 @@
 use std::fmt::Write as _;
+use std::path::{Path, PathBuf};
 
 use bytes::Bytes;
 use reqwest::Client;
 use sha2::{Digest, Sha256};
+use tracing::warn;
 
 /// A downloaded page plus its checksum.
 #[derive(Clone, Debug)]
@@ -41,6 +43,7 @@ pub struct Fetcher {
     client: Client,
     url: String,
     validate: fn(&[u8]) -> Result<(), String>,
+    state: Option<PathBuf>,
     last: Option<Snapshot>,
 }
 
@@ -54,15 +57,31 @@ impl Fetcher {
             client,
             url: url.into(),
             validate,
+            state: None,
             last: None,
         }
+    }
+
+    /// Load the last snapshot from disk, so a restart behaves like a normal poll
+    /// instead of a fresh baseline.
+    pub fn with_state(mut self, path: impl Into<PathBuf>) -> Self {
+        let path = path.into();
+        if let Ok(body) = std::fs::read(&path) {
+            if (self.validate)(&body).is_ok() {
+                self.last = Some(Snapshot::new(body.into()));
+            } else {
+                warn!(path = %path.display(), "ignoring invalid snapshot state");
+            }
+        }
+        self.state = Some(path);
+        self
     }
 
     pub fn last(&self) -> Option<&Snapshot> {
         self.last.as_ref()
     }
 
-    /// Fetch once, compare against the in-memory cache and update it.
+    /// Fetch once, compare against the cached snapshot and update it.
     pub async fn poll(&mut self) -> FetchEvent {
         let body = match self.download().await {
             Ok(body) => body,
@@ -85,7 +104,13 @@ impl Fetcher {
                 current: current.clone(),
             },
         };
-        self.last = Some(current);
+        self.last = Some(current.clone());
+
+        if let Some(path) = &self.state
+            && let Err(error) = save(path, &current.body)
+        {
+            warn!(path = %path.display(), %error, "failed to persist snapshot");
+        }
         event
     }
 
@@ -105,4 +130,13 @@ impl Fetcher {
             .await
             .map_err(|e| format!("body read failed: {e}"))
     }
+}
+
+fn save(path: &Path, body: &[u8]) -> std::io::Result<()> {
+    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent)?;
+    }
+    let tmp = path.with_extension("tmp");
+    std::fs::write(&tmp, body)?;
+    std::fs::rename(&tmp, path)
 }

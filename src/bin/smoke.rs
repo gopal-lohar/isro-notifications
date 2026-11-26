@@ -46,6 +46,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     telegram_config.api = config.telegram.api.clone();
     telegram_config.admin_username = config.telegram.admin_username.clone();
     telegram_config.welcome = config.telegram.welcome.clone();
+    telegram_config.concurrency = config.telegram.concurrency;
     let telegram = Telegram::new(client.clone(), telegram_config);
 
     let added = telegram.poll_updates().await?;
@@ -61,6 +62,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         enrich::Config {
             max_chars: config.summary.max_chars,
             base_url: config.isro.base_url.clone(),
+            concurrency: config.summary.concurrency,
         },
         config.telegram.alerts.clone(),
         Some(Box::new(Sarvam::new(client.clone(), sarvam_key)) as Box<dyn Summarizer>),

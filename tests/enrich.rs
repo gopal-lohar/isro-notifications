@@ -225,7 +225,7 @@ async fn internal_link_is_summarised_with_attachments() {
     assert_eq!(fake.calls(), 1);
     assert_eq!(
         updates[0].text,
-        "PS3 ground test succeeds\n\nISRO conducted a ground static test of the PSLV third stage."
+        "Original title\n\nISRO conducted a ground static test of the PSLV third stage."
     );
     assert_eq!(updates[0].attachments.len(), 2);
     assert!(
@@ -277,7 +277,7 @@ async fn cached_articles_parse_into_text_and_media() {
         )
         .await;
 
-        assert_eq!(updates[0].text, "Title\n\nSummary.", "{name}");
+        assert_eq!(updates[0].text, "Original title\n\nSummary.", "{name}");
         assert!(!updates[0].attachments.is_empty(), "{name} has no media");
         assert!(
             updates[0]
@@ -309,7 +309,10 @@ async fn summary_without_blank_line_is_reformatted() {
     )
     .await;
 
-    assert_eq!(updates[0].text, "Title line\n\nSummary without a blank line.");
+    assert_eq!(
+        updates[0].text,
+        "Original title\n\nSummary without a blank line."
+    );
 }
 
 #[tokio::test]
@@ -317,6 +320,7 @@ async fn passthrough_title_shares_the_budget_with_the_link() {
     let cfg = Config {
         max_chars: 100,
         base_url: "https://www.isro.gov.in".to_string(),
+        concurrency: 4,
     };
     let link = "https://example.com/a-link-that-eats-some-budget.html";
     let updates = enrich::enrich(
@@ -332,6 +336,29 @@ async fn passthrough_title_shares_the_budget_with_the_link() {
 }
 
 #[tokio::test]
+async fn title_is_enforced_when_the_model_rewrites_it() {
+    let name = "Ground_test_of_third_stage_of_PSLV_PS3.html";
+    let routes: Routes = Arc::new(Mutex::new(HashMap::from([(
+        format!("/{name}"),
+        (200, article(name)),
+    )])));
+    let last: LastRequest = Arc::new(Mutex::new(None));
+    let addr = serve(routes, last).await;
+    let cfg = Config::new(format!("http://{addr}"));
+    let fake = Fake::new("Rewritten title\n\nSummary.");
+
+    let updates = enrich::enrich(
+        &reqwest::Client::new(),
+        &[titled_item("Original title", &format!("http://{addr}/{name}"))],
+        &cfg,
+        Some(&fake),
+    )
+    .await;
+
+    assert_eq!(updates[0].text, "Original title\n\nSummary.");
+}
+
+#[tokio::test]
 async fn long_summary_is_retried_then_trimmed() {
     let name = "Ground_test_of_third_stage_of_PSLV_PS3.html";
     let routes: Routes = Arc::new(Mutex::new(HashMap::from([(
@@ -343,6 +370,7 @@ async fn long_summary_is_retried_then_trimmed() {
     let cfg = Config {
         max_chars: 100,
         base_url: format!("http://{addr}"),
+        concurrency: 4,
     };
     let fake = Fake::new("x".repeat(2000));
 

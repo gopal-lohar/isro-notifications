@@ -3,6 +3,7 @@ use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
 
+use futures::stream::{self, StreamExt};
 use reqwest::{Client, Url};
 use scraper::{Html, Selector};
 use tracing::warn;
@@ -15,6 +16,8 @@ pub struct Config {
     pub max_chars: usize,
     /// Site the updates belong to; links on this host are fetched and summarised.
     pub base_url: String,
+    /// How many articles to fetch and summarise at once.
+    pub concurrency: usize,
 }
 
 impl Config {
@@ -22,6 +25,7 @@ impl Config {
         Self {
             max_chars: 1024,
             base_url: base_url.into(),
+            concurrency: 4,
         }
     }
 }
@@ -88,11 +92,11 @@ pub async fn enrich(
     cfg: &Config,
     summarizer: Option<&dyn Summarizer>,
 ) -> Vec<Update> {
-    let mut updates = Vec::with_capacity(items.len());
-    for item in items {
-        updates.push(enrich_one(client, item, cfg, summarizer).await);
-    }
-    updates
+    stream::iter(items)
+        .map(|item| enrich_one(client, item, cfg, summarizer))
+        .buffered(cfg.concurrency.max(1))
+        .collect()
+        .await
 }
 
 async fn enrich_one(
@@ -152,14 +156,14 @@ async fn summarize_with_retry(
     text: &str,
     max_chars: usize,
 ) -> Result<String, String> {
-    let first = format_summary(&summarizer.summarize(title, text, max_chars).await?);
+    let first = format_summary(&summarizer.summarize(title, text, max_chars).await?, title);
     if first.chars().count() <= max_chars {
         return Ok(first);
     }
 
     // One retry with a tighter budget, then hard-trim.
     let second = match summarizer.summarize(title, text, max_chars / 2).await {
-        Ok(text) => format_summary(&text),
+        Ok(text) => format_summary(&text, title),
         Err(_) => first,
     };
     if second.chars().count() <= max_chars {
@@ -267,12 +271,17 @@ fn push_attachment(
     }
 }
 
-/// Force the `title\n\nsummary` shape, even if the model used a single newline.
-fn format_summary(text: &str) -> String {
+/// Force the `title\n\nsummary` shape and make the update's title authoritative.
+fn format_summary(text: &str, title: &str) -> String {
     let text = normalize(text);
-    match text.split_once('\n') {
-        Some((title, rest)) => format!("{}\n\n{}", title.trim(), rest.trim_start_matches('\n')),
+    let body = match text.split_once('\n') {
+        Some((_, rest)) => rest.trim_start_matches('\n').to_string(),
         None => text,
+    };
+    if body.is_empty() {
+        title.to_string()
+    } else {
+        format!("{title}\n\n{body}")
     }
 }
 

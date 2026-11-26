@@ -80,6 +80,7 @@ fn pipeline(rec: &Recording, summarizer: Option<Box<dyn Summarizer>>, base_url: 
         Config {
             max_chars: 1024,
             base_url: base_url.to_string(),
+            concurrency: 4,
         },
         Alerts::default(),
         summarizer,
@@ -267,7 +268,7 @@ async fn internal_link_is_summarised_and_delivered() {
         .await;
 
     assert_eq!(updates.len(), 1);
-    assert_eq!(updates[0].text, "Title\n\nSummary.");
+    assert_eq!(updates[0].text, "B\n\nSummary.");
     assert_eq!(updates[0].attachments.len(), 1);
     assert_eq!(updates[0].attachments[0].url, format!("{base}/media/pic.webp"));
     assert_eq!(rec.delivered().len(), 1);

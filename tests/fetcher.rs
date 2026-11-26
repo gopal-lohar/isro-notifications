@@ -90,6 +90,43 @@ async fn fetcher_reports_baseline_change_and_failures() {
 }
 
 #[tokio::test]
+async fn state_survives_a_restart() {
+    let a = dev("isro-2026-09-06-16-42-25.html");
+    let b = dev("isro-2026-09-09-19-15-54.html");
+    let state = std::env::temp_dir().join(format!(
+        "isro-fetcher-state-{}.html",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&state);
+
+    let server: State = Arc::new(Mutex::new(Response {
+        status: 200,
+        body: a,
+    }));
+    let addr = serve(server.clone()).await;
+    let url = format!("http://{addr}/");
+
+    let mut first = Fetcher::new(reqwest::Client::new(), url.clone(), diff::validate)
+        .with_state(&state);
+    assert!(matches!(first.poll().await, FetchEvent::Baseline { .. }));
+    assert!(state.exists());
+
+    // A restart loads the persisted snapshot, so the same page is not a baseline.
+    let mut second = Fetcher::new(reqwest::Client::new(), url.clone(), diff::validate)
+        .with_state(&state);
+    assert!(matches!(second.poll().await, FetchEvent::Unchanged { .. }));
+
+    // A change after the restart is reported against the persisted snapshot.
+    server.lock().unwrap().body = b;
+    let FetchEvent::Changed { previous, current } = second.poll().await else {
+        panic!("expected a change");
+    };
+    assert_ne!(previous.checksum, current.checksum);
+
+    std::fs::remove_file(&state).unwrap();
+}
+
+#[tokio::test]
 async fn fetcher_reports_download_failure() {
     let addr = {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

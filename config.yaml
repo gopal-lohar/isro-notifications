@@ -2,14 +2,17 @@ isro:
   url: https://www.isro.gov.in
   base_url: https://www.isro.gov.in
   poll_interval_secs: 1800
+  state: ./.state/last.html
 
 summary:
   max_chars: 1024
+  concurrency: 4
 
 telegram:
   registry: ./.state/telegram.json
   admin_username: alice
   welcome: "👋 You're subscribed. ISRO updates will arrive here."
+  concurrency: 2
   alerts:
     fetch_failed: "fetch failed: {error}"
     site_failure: "site failure: {message}"

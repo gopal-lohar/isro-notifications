@@ -20,6 +20,8 @@ pub struct Isro {
     /// Canonical site used to resolve links; defaults to `url`.
     pub base_url: String,
     pub poll_interval_secs: u64,
+    /// Last snapshot, so a restart diffs instead of re-baselining.
+    pub state: PathBuf,
 }
 
 impl Default for Isro {
@@ -28,6 +30,7 @@ impl Default for Isro {
             url: "https://www.isro.gov.in".to_string(),
             base_url: String::new(),
             poll_interval_secs: 1800,
+            state: PathBuf::from("./.state/last.html"),
         }
     }
 }
@@ -36,11 +39,16 @@ impl Default for Isro {
 #[serde(default)]
 pub struct Summary {
     pub max_chars: usize,
+    /// How many articles to fetch and summarise at once.
+    pub concurrency: usize,
 }
 
 impl Default for Summary {
     fn default() -> Self {
-        Self { max_chars: 1024 }
+        Self {
+            max_chars: 1024,
+            concurrency: 4,
+        }
     }
 }
 
@@ -51,6 +59,8 @@ pub struct Telegram {
     pub registry: PathBuf,
     pub admin_username: Option<String>,
     pub welcome: String,
+    /// How many chats to send to at once.
+    pub concurrency: usize,
     pub alerts: Alerts,
 }
 
@@ -61,6 +71,7 @@ impl Default for Telegram {
             registry: PathBuf::from("./.state/telegram.json"),
             admin_username: None,
             welcome: "👋 You're subscribed. ISRO updates will arrive here.".to_string(),
+            concurrency: 2,
             alerts: Alerts::default(),
         }
     }

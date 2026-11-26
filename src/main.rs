@@ -34,6 +34,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             telegram.api = config.telegram.api.clone();
             telegram.admin_username = config.telegram.admin_username.clone();
             telegram.welcome = config.telegram.welcome.clone();
+            telegram.concurrency = config.telegram.concurrency;
             Telegram::new(client.clone(), telegram)
         });
 
@@ -47,6 +48,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         enrich::Config {
             max_chars: config.summary.max_chars,
             base_url: config.isro.base_url.clone(),
+            concurrency: config.summary.concurrency,
         },
         config.telegram.alerts.clone(),
         summarizer,
@@ -74,7 +76,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         "starting isro-notifications"
     );
 
-    let mut fetcher = Fetcher::new(client, config.isro.url.clone(), diff::validate);
+    let mut fetcher = Fetcher::new(client, config.isro.url.clone(), diff::validate)
+        .with_state(&config.isro.state);
     let mut tick = tokio::time::interval(Duration::from_secs(
         config.isro.poll_interval_secs.max(1),
     ));

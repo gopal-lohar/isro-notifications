@@ -4,6 +4,7 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use futures::stream::{self, StreamExt};
 use reqwest::Client;
 use serde_json::{Map, Value, json};
 use tracing::{info, warn};
@@ -25,6 +26,8 @@ pub struct TelegramConfig {
     pub admin_username: Option<String>,
     /// Reply sent when a user sends /start.
     pub welcome: String,
+    /// How many chats to send to at once.
+    pub concurrency: usize,
 }
 
 impl TelegramConfig {
@@ -35,6 +38,7 @@ impl TelegramConfig {
             api: DEFAULT_API.to_string(),
             admin_username: None,
             welcome: WELCOME.to_string(),
+            concurrency: 2,
         }
     }
 }
@@ -52,6 +56,7 @@ struct Inner {
     registry: Mutex<Registry>,
     admin_username: Option<String>,
     welcome: String,
+    concurrency: usize,
 }
 
 impl Telegram {
@@ -66,6 +71,7 @@ impl Telegram {
                 registry: Mutex::new(registry),
                 admin_username: config.admin_username,
                 welcome: config.welcome,
+                concurrency: config.concurrency,
             }),
         }
     }
@@ -298,7 +304,7 @@ impl Telegram {
                 .as_str()
                 .unwrap_or("unknown error")
                 .to_string();
-            if status == 429 && attempt < 2 {
+            if status == 429 && attempt < 3 {
                 let retry = body["parameters"]["retry_after"].as_u64().unwrap_or(1);
                 warn!(method, retry, "telegram rate limited, retrying");
                 tokio::time::sleep(Duration::from_secs(retry)).await;
@@ -331,16 +337,25 @@ impl Deliverer for Telegram {
                 return Err("no active chats registered".to_string());
             }
 
+            let results: Vec<(i64, Result<(), SendError>)> = stream::iter(chats)
+                .map(|chat| async move {
+                    let result = self.send(&chat, update).await;
+                    (chat.chat_id, result)
+                })
+                .buffered(self.inner.concurrency.max(1))
+                .collect()
+                .await;
+
             let mut errors = Vec::new();
-            for chat in chats {
-                if let Err(error) = self.send(&chat, update).await {
+            for (chat_id, result) in results {
+                if let Err(error) = result {
                     if error.blocked {
                         let mut registry = self.inner.registry.lock().unwrap();
-                        registry.deactivate(chat.chat_id);
+                        registry.deactivate(chat_id);
                         let _ = registry.save(&self.inner.registry_path);
-                        info!(chat_id = chat.chat_id, "chat blocked the bot, deactivated");
+                        info!(chat_id, "chat blocked the bot, deactivated");
                     }
-                    errors.push(format!("{}: {}", chat.chat_id, error.message));
+                    errors.push(format!("{chat_id}: {}", error.message));
                 }
             }
 

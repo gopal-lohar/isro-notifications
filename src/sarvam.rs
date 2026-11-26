@@ -87,7 +87,8 @@ fn prompt(title: &str, text: &str, max_chars: usize) -> String {
          - First line: the title exactly as given below, character for character. Do not rewrite it, do not change its tense or wording.\n\
          - One blank line.\n\
          - Then a summary of at most 3 sentences that condenses the article's own sentences. Keep the article's wording, tense and terminology; do not rewrite it like a news report, and do not copy it verbatim.\n\
-         - The whole reply must be at most {max_chars} characters. This is a hard limit.\n\
+         - Keep the whole reply under {max_chars} characters.\n\
+         - Do not write anything after the summary.\n\
          - Plain text only: no markdown, no HTML, no bullet points.\n\n\
          Title: {title}\n\n\
          Article:\n{text}"

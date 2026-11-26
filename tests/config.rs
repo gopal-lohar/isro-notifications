@@ -18,7 +18,10 @@ fn defaults_are_used_when_file_is_missing() {
     assert_eq!(config.isro.url, "https://www.isro.gov.in");
     assert_eq!(config.isro.base_url, "https://www.isro.gov.in");
     assert_eq!(config.isro.poll_interval_secs, 1800);
+    assert_eq!(config.isro.state, PathBuf::from("./.state/last.html"));
     assert_eq!(config.summary.max_chars, 1024);
+    assert_eq!(config.summary.concurrency, 4);
+    assert_eq!(config.telegram.concurrency, 2);
     assert_eq!(
         config.telegram.registry,
         PathBuf::from("./.state/telegram.json")
