@@ -13,9 +13,10 @@ use isro_notifications::pipeline::Pipeline;
 use isro_notifications::sarvam::Sarvam;
 use isro_notifications::scrapper;
 use isro_notifications::telegram::{Telegram, TelegramConfig};
+use isro_notifications::web::{self, WebState};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
-use tracing::info;
+use tracing::{error, info};
 
 const CHECKS: usize = 6;
 const INTERVAL: Duration = Duration::from_secs(30);
@@ -38,6 +39,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     config.isro.base_url = "https://www.isro.gov.in".into();
     if let Ok(api) = std::env::var("TELEGRAM_API") {
         config.telegram.api = api;
+    }
+    if let Ok(registry) = std::env::var("TELEGRAM_REGISTRY") {
+        config.telegram.registry = registry.into();
     }
 
     let client = scrapper::client();
@@ -68,10 +72,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             concurrency: config.summary.concurrency,
         },
         config.telegram.alerts.clone(),
-        analytics,
+        analytics.clone(),
         Some(Box::new(Sarvam::new(client.clone(), sarvam_key)) as Box<dyn Summarizer>),
-        Box::new(telegram),
+        Box::new(telegram.clone()),
     );
+
+    let bind = std::env::var("ANALYTICS_BIND").unwrap_or_else(|_| "127.0.0.1:8080".into());
+    if !bind.trim().is_empty() {
+        match bind.parse::<std::net::SocketAddr>() {
+            Ok(addr) => match TcpListener::bind(addr).await {
+                Ok(listener) => {
+                    let state = WebState {
+                        analytics: analytics.clone(),
+                        telegram: Some(telegram),
+                        admin_username: config.telegram.admin_username.clone(),
+                    };
+                    tokio::spawn(async move {
+                        if let Err(error) = web::serve(listener, state).await {
+                            error!(%error, "analytics server stopped");
+                        }
+                    });
+                    info!(%addr, "analytics server listening");
+                }
+                Err(error) => error!(%error, %addr, "analytics bind failed"),
+            },
+            Err(error) => error!(%error, "invalid ANALYTICS_BIND"),
+        }
+    }
 
     let mut fetcher = Fetcher::new(client, config.isro.url.clone(), diff::validate);
     let mut outcomes = Vec::new();
