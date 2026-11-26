@@ -114,17 +114,23 @@ cargo run --bin fetch -- https://www.isro.gov.in
 
 Saves the page to `$CACHE_DIR` (default `./`) with a timestamped name.
 
-## systemd
-
-Copy `deploy/isro-notifications.service` to `/etc/systemd/system/`, edit `WorkingDirectory`, `ExecStart` and `User`, then:
+## Docker
 
 ```bash
-sudo systemctl daemon-reload
-sudo systemctl enable --now isro-notifications
-journalctl -u isro-notifications -f
+docker compose up -d --build
+docker compose logs -f
 ```
 
-`WorkingDirectory` matters because `.env`, `config.yaml` and `.state/` are relative.
+The container uses host networking and binds the analytics page to `127.0.0.1:8080`. Change `ANALYTICS_BIND` in `docker-compose.yml` to your Tailscale name or IP to expose it on the tailnet.
+
+`.env` is read from the host, `config.yaml` is mounted read-only, and `.state/` is a bind mount so the registry and last snapshot survive rebuilds.
+
+To update:
+
+```bash
+git pull
+docker compose up -d --build
+```
 
 ## Notes
 
