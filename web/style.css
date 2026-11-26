@@ -67,11 +67,12 @@ header {
 
 nav {
   display: flex;
+  gap: 16px;
   margin-right: auto;
 }
 
 nav button {
-  padding: 4px 16px;
+  padding: 4px 8px;
   border: 0;
   border-bottom: 2px solid transparent;
   background: none;
