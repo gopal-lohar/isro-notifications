@@ -75,9 +75,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let event = fetcher.poll().await;
         let label = label(&event);
         let updates = pipeline.handle(event).await;
-        for update in &updates {
-            info!("{}", update);
-        }
         info!(check, label, updates = updates.len(), "check");
         outcomes.push((label, updates.len()));
         if check + 1 < CHECKS {

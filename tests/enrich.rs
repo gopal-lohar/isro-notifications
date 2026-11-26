@@ -359,6 +359,34 @@ async fn title_is_enforced_when_the_model_rewrites_it() {
 }
 
 #[tokio::test]
+async fn meta_lines_are_stripped() {
+    let name = "Ground_test_of_third_stage_of_PSLV_PS3.html";
+    let routes: Routes = Arc::new(Mutex::new(HashMap::from([(
+        format!("/{name}"),
+        (200, article(name)),
+    )])));
+    let last: LastRequest = Arc::new(Mutex::new(None));
+    let addr = serve(routes, last).await;
+    let cfg = Config::new(format!("http://{addr}"));
+
+    for reply in [
+        "Title\n\nSummary.\n\nCharacter count: 694",
+        "Title\n\nSummary.\n\n(119 characters)",
+    ] {
+        let fake = Fake::new(reply);
+        let updates = enrich::enrich(
+            &reqwest::Client::new(),
+            &[titled_item("Original title", &format!("http://{addr}/{name}"))],
+            &cfg,
+            Some(&fake),
+        )
+        .await;
+
+        assert_eq!(updates[0].text, "Original title\n\nSummary.");
+    }
+}
+
+#[tokio::test]
 async fn long_summary_is_retried_then_trimmed() {
     let name = "Ground_test_of_third_stage_of_PSLV_PS3.html";
     let routes: Routes = Arc::new(Mutex::new(HashMap::from([(

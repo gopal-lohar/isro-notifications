@@ -25,18 +25,16 @@ pub trait Deliverer: Send + Sync {
     }
 }
 
-/// Logs updates to the tracing output.
-pub struct LogDeliverer;
+/// Drops updates. Used when no delivery channel is configured; the pipeline
+/// still logs what it produced.
+pub struct NoopDeliverer;
 
-impl Deliverer for LogDeliverer {
+impl Deliverer for NoopDeliverer {
     fn deliver<'a>(
         &'a self,
-        update: &'a Update,
+        _update: &'a Update,
     ) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>> {
-        Box::pin(async move {
-            info!("{}", update);
-            Ok(())
-        })
+        Box::pin(async { Ok(()) })
     }
 }
 
@@ -111,8 +109,11 @@ impl Pipeline {
                         )
                         .await;
                         for update in &updates {
-                            if let Err(error) = self.deliverer.deliver(update).await {
-                                error!(%error, "delivery failed");
+                            match self.deliverer.deliver(update).await {
+                                Ok(()) => info!(kind = ?update.kind, "delivered: {}", update),
+                                Err(error) => {
+                                    error!(%error, kind = ?update.kind, "delivery failed: {}", update)
+                                }
                             }
                         }
                         updates

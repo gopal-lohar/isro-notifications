@@ -5,7 +5,7 @@ use isro_notifications::config::{self, Config};
 use isro_notifications::diff;
 use isro_notifications::enrich::{self, Summarizer};
 use isro_notifications::fetcher::Fetcher;
-use isro_notifications::pipeline::{Deliverer, LogDeliverer, Pipeline};
+use isro_notifications::pipeline::{Deliverer, NoopDeliverer, Pipeline};
 use isro_notifications::sarvam::Sarvam;
 use isro_notifications::scrapper;
 use isro_notifications::telegram::{Telegram, TelegramConfig};
@@ -40,7 +40,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let deliverer: Box<dyn Deliverer> = match &telegram {
         Some(telegram) => Box::new(telegram.clone()),
-        None => Box::new(LogDeliverer),
+        None => Box::new(NoopDeliverer),
     };
 
     let pipeline = Pipeline::new(

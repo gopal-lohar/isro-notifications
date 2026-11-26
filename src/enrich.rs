@@ -273,7 +273,7 @@ fn push_attachment(
 
 /// Force the `title\n\nsummary` shape and make the update's title authoritative.
 fn format_summary(text: &str, title: &str) -> String {
-    let text = normalize(text);
+    let text = strip_meta(&normalize(text));
     let body = match text.split_once('\n') {
         Some((_, rest)) => rest.trim_start_matches('\n').to_string(),
         None => text,
@@ -283,6 +283,34 @@ fn format_summary(text: &str, title: &str) -> String {
     } else {
         format!("{title}\n\n{body}")
     }
+}
+
+/// Drop trailing meta lines the model sometimes adds, e.g. "Character count: 694".
+fn strip_meta(text: &str) -> String {
+    let mut lines: Vec<&str> = text.lines().collect();
+    while lines.last().is_some_and(|line| is_meta_line(line)) {
+        lines.pop();
+    }
+    lines.join("\n").trim_end().to_string()
+}
+
+fn is_meta_line(line: &str) -> bool {
+    let line = line.trim();
+    if line.to_lowercase().starts_with("character count") {
+        return true;
+    }
+    let inner = line
+        .trim_start_matches('(')
+        .trim_end_matches(')')
+        .trim()
+        .to_lowercase();
+    let Some(count) = inner
+        .strip_suffix(" characters")
+        .or_else(|| inner.strip_suffix(" character"))
+    else {
+        return false;
+    };
+    !count.is_empty() && count.chars().all(|c| c.is_ascii_digit())
 }
 
 /// Trim, normalise line endings and collapse runs of blank lines.
