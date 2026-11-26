@@ -121,7 +121,7 @@ docker compose up -d --build
 docker compose logs -f
 ```
 
-The container uses host networking and binds the analytics page to `127.0.0.1:8080`. Change `ANALYTICS_BIND` in `docker-compose.yml` to your Tailscale name or IP to expose it on the tailnet.
+The container uses host networking. Set `ANALYTICS_BIND` in `.env` to change where the analytics page binds; it defaults to `127.0.0.1:8080`.
 
 `.env` is read from the host, `config.yaml` is mounted read-only, and `.state/` is a bind mount so the registry and last snapshot survive rebuilds.
 

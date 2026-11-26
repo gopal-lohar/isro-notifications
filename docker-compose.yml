@@ -4,9 +4,6 @@ services:
     restart: unless-stopped
     network_mode: host
     env_file: .env
-    environment:
-      # Change to your Tailscale name or IP to expose the page on the tailnet.
-      ANALYTICS_BIND: 127.0.0.1:8080
     volumes:
       - ./config.yaml:/app/config.yaml:ro
       - ./.state:/app/.state
