@@ -1,0 +1,14 @@
+[Unit]
+Description=ISRO notifications
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=/opt/isro-notifications
+ExecStart=/opt/isro-notifications/target/release/isro-notifications
+Restart=always
+RestartSec=5
+User=isro
+
+[Install]
+WantedBy=multi-user.target

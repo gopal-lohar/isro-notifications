@@ -116,12 +116,12 @@ Saves the page to `$CACHE_DIR` (default `./`) with a timestamped name.
 
 ## systemd
 
-```ini
-[Service]
-WorkingDirectory=/opt/isro-notifications
-ExecStart=/opt/isro-notifications/target/release/isro-notifications
-Restart=always
-User=isro
+Copy `deploy/isro-notifications.service` to `/etc/systemd/system/`, edit `WorkingDirectory`, `ExecStart` and `User`, then:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now isro-notifications
+journalctl -u isro-notifications -f
 ```
 
 `WorkingDirectory` matters because `.env`, `config.yaml` and `.state/` are relative.
