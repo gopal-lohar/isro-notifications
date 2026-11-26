@@ -1,0 +1,316 @@
+use std::collections::HashSet;
+use std::fmt;
+use std::future::Future;
+use std::pin::Pin;
+
+use reqwest::{Client, Url};
+use scraper::{Html, Selector};
+use tracing::warn;
+
+use crate::diff::{Kind, NewsItem};
+
+#[derive(Clone, Debug)]
+pub struct Config {
+    /// Maximum length of the final text, in characters.
+    pub max_chars: usize,
+    /// Site the updates belong to; links on this host are fetched and summarised.
+    pub base_url: String,
+}
+
+impl Config {
+    pub fn new(base_url: impl Into<String>) -> Self {
+        Self {
+            max_chars: 1024,
+            base_url: base_url.into(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AttachmentKind {
+    Image,
+    Video,
+}
+
+impl fmt::Display for AttachmentKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            AttachmentKind::Image => write!(f, "image"),
+            AttachmentKind::Video => write!(f, "video"),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Attachment {
+    pub kind: AttachmentKind,
+    pub url: String,
+}
+
+/// What the next layer receives.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Update {
+    pub kind: Kind,
+    pub link: Option<String>,
+    /// Message body: the title for plain links, or `title\n\nsummary` for summarised articles.
+    pub text: String,
+    pub attachments: Vec<Attachment>,
+}
+
+impl fmt::Display for Update {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.text)?;
+        if let Some(link) = &self.link {
+            write!(f, "\n{link}")?;
+        }
+        for attachment in &self.attachments {
+            write!(f, "\n[{}] {}", attachment.kind, attachment.url)?;
+        }
+        Ok(())
+    }
+}
+
+/// Pluggable text summariser. The layer never talks to a provider directly.
+pub trait Summarizer: Send + Sync {
+    fn summarize<'a>(
+        &'a self,
+        text: &'a str,
+        max_chars: usize,
+    ) -> Pin<Box<dyn Future<Output = Result<String, String>> + Send + 'a>>;
+}
+
+/// Turn diff items into updates: external links pass through, internal links are
+/// fetched and summarised when a summariser is available.
+pub async fn enrich(
+    client: &Client,
+    items: &[NewsItem],
+    cfg: &Config,
+    summarizer: Option<&dyn Summarizer>,
+) -> Vec<Update> {
+    let mut updates = Vec::with_capacity(items.len());
+    for item in items {
+        updates.push(enrich_one(client, item, cfg, summarizer).await);
+    }
+    updates
+}
+
+async fn enrich_one(
+    client: &Client,
+    item: &NewsItem,
+    cfg: &Config,
+    summarizer: Option<&dyn Summarizer>,
+) -> Update {
+    let Some(link) = item.link.as_deref() else {
+        return passthrough(item);
+    };
+    let Some(summarizer) = summarizer else {
+        return passthrough(item);
+    };
+    if !is_internal(&cfg.base_url, link) {
+        return passthrough(item);
+    }
+
+    let article = match fetch_article(client, link).await {
+        Ok(article) => article,
+        Err(error) => {
+            warn!(%link, %error, "article fetch failed, sending link only");
+            return passthrough(item);
+        }
+    };
+
+    let source = format!("{}\n\n{}", article.title, article.text);
+    let text = match summarize_with_retry(summarizer, &source, cfg.max_chars).await {
+        Ok(text) => text,
+        Err(error) => {
+            warn!(%link, %error, "summary failed, sending link only");
+            return passthrough(item);
+        }
+    };
+
+    Update {
+        kind: item.kind,
+        link: item.link.clone(),
+        text,
+        attachments: article.attachments,
+    }
+}
+
+fn passthrough(item: &NewsItem) -> Update {
+    Update {
+        kind: item.kind,
+        link: item.link.clone(),
+        text: item.title.clone(),
+        attachments: Vec::new(),
+    }
+}
+
+async fn summarize_with_retry(
+    summarizer: &dyn Summarizer,
+    text: &str,
+    max_chars: usize,
+) -> Result<String, String> {
+    let first = format_summary(&summarizer.summarize(text, max_chars).await?);
+    if first.chars().count() <= max_chars {
+        return Ok(first);
+    }
+
+    // One retry with a tighter budget, then hard-trim.
+    let second = match summarizer.summarize(text, max_chars * 3 / 4).await {
+        Ok(text) => format_summary(&text),
+        Err(_) => first,
+    };
+    if second.chars().count() <= max_chars {
+        return Ok(second);
+    }
+    Ok(trim_to(&second, max_chars))
+}
+
+fn is_internal(base: &str, link: &str) -> bool {
+    match (Url::parse(base), Url::parse(link)) {
+        (Ok(base), Ok(link)) => base.host_str() == link.host_str(),
+        _ => false,
+    }
+}
+
+struct Article {
+    title: String,
+    text: String,
+    attachments: Vec<Attachment>,
+}
+
+async fn fetch_article(client: &Client, url: &str) -> Result<Article, String> {
+    let response = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| format!("request failed: {e}"))?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(format!("HTTP {status}"));
+    }
+    let body = response
+        .text()
+        .await
+        .map_err(|e| format!("body read failed: {e}"))?;
+    Ok(parse_article(&body, url))
+}
+
+fn parse_article(html: &str, url: &str) -> Article {
+    let doc = Html::parse_document(html);
+
+    let heading = Selector::parse("h1.pageHeading span").expect("heading selector");
+    let title_tag = Selector::parse("title").expect("title selector");
+    let title = doc
+        .select(&heading)
+        .next()
+        .map(|el| normalize(&el.text().collect::<String>()))
+        .filter(|title| !title.is_empty())
+        .or_else(|| {
+            doc.select(&title_tag)
+                .next()
+                .map(|el| normalize(&el.text().collect::<String>()))
+        })
+        .unwrap_or_default();
+
+    let paragraphs = Selector::parse("p.pageContent, p.pMain").expect("paragraph selector");
+    let text = doc
+        .select(&paragraphs)
+        .map(|el| normalize(&el.text().collect::<String>()))
+        .filter(|text| !text.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+
+    Article {
+        title,
+        text,
+        attachments: extract_attachments(&doc, url),
+    }
+}
+
+fn extract_attachments(doc: &Html, base: &str) -> Vec<Attachment> {
+    let mut attachments = Vec::new();
+    let mut seen = HashSet::new();
+
+    let images = Selector::parse("img[src]").expect("image selector");
+    for el in doc.select(&images) {
+        let src = el.value().attr("src").unwrap_or_default();
+        let alt = el.value().attr("alt").unwrap_or_default();
+        if src.starts_with("data:") || src.contains("/icon/") || alt.eq_ignore_ascii_case("pdf icon")
+        {
+            continue;
+        }
+        push_attachment(&mut attachments, &mut seen, AttachmentKind::Image, base, src);
+    }
+
+    let media = Selector::parse("video[src], video source[src], iframe[src]").expect("media selector");
+    for el in doc.select(&media) {
+        let src = el.value().attr("src").unwrap_or_default();
+        if el.value().name() == "iframe" && !is_video_embed(src) {
+            continue;
+        }
+        push_attachment(&mut attachments, &mut seen, AttachmentKind::Video, base, src);
+    }
+
+    attachments
+}
+
+fn is_video_embed(src: &str) -> bool {
+    ["youtube.com", "youtu.be", "vimeo.com", "player."]
+        .iter()
+        .any(|host| src.contains(host))
+}
+
+fn push_attachment(
+    attachments: &mut Vec<Attachment>,
+    seen: &mut HashSet<String>,
+    kind: AttachmentKind,
+    base: &str,
+    src: &str,
+) {
+    if src.is_empty() {
+        return;
+    }
+    let url = Url::parse(base)
+        .ok()
+        .and_then(|base| base.join(src).ok())
+        .map(|url| url.to_string())
+        .unwrap_or_else(|| src.to_string());
+    if seen.insert(url.clone()) {
+        attachments.push(Attachment { kind, url });
+    }
+}
+
+/// Force the `title\n\nsummary` shape, even if the model used a single newline.
+fn format_summary(text: &str) -> String {
+    let text = normalize(text);
+    match text.split_once('\n') {
+        Some((title, rest)) => format!("{}\n\n{}", title.trim(), rest.trim_start_matches('\n')),
+        None => text,
+    }
+}
+
+/// Trim, normalise line endings and collapse runs of blank lines.
+fn normalize(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut newlines = 0;
+    for ch in text.trim().chars() {
+        if ch == '\n' {
+            newlines += 1;
+            if newlines > 2 {
+                continue;
+            }
+        } else {
+            newlines = 0;
+        }
+        out.push(ch);
+    }
+    out
+}
+
+fn trim_to(text: &str, max_chars: usize) -> String {
+    text.chars()
+        .take(max_chars)
+        .collect::<String>()
+        .trim_end()
+        .to_string()
+}
