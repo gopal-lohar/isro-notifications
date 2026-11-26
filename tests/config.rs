@@ -65,6 +65,15 @@ telegram:
 }
 
 #[test]
+fn committed_config_parses() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("config.yaml");
+    let config = Config::load(&path).unwrap();
+
+    assert!(!config.isro.url.is_empty());
+    assert!(config.telegram.admin_username.is_some());
+}
+
+#[test]
 fn base_url_defaults_to_url() {
     let path = temp("base");
     std::fs::write(&path, "isro:\n  url: https://example.com\n").unwrap();

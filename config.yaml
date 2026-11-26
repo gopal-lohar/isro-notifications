@@ -8,7 +8,7 @@ summary:
 
 telegram:
   registry: ./.state/telegram.json
-  # admin_username: alice
+  admin_username: alice
   welcome: "👋 You're subscribed. ISRO updates will arrive here."
   alerts:
     fetch_failed: "fetch failed: {error}"
