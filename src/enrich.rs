@@ -74,6 +74,7 @@ impl fmt::Display for Update {
 pub trait Summarizer: Send + Sync {
     fn summarize<'a>(
         &'a self,
+        title: &'a str,
         text: &'a str,
         max_chars: usize,
     ) -> Pin<Box<dyn Future<Output = Result<String, String>> + Send + 'a>>;
@@ -118,8 +119,7 @@ async fn enrich_one(
         }
     };
 
-    let source = format!("{}\n\n{}", article.title, article.text);
-    let text = match summarize_with_retry(summarizer, &source, cfg.max_chars).await {
+    let text = match summarize_with_retry(summarizer, &item.title, &article.text, cfg.max_chars).await {
         Ok(text) => text,
         Err(error) => {
             warn!(%link, %error, "summary failed, sending link only");
@@ -146,16 +146,17 @@ fn passthrough(item: &NewsItem) -> Update {
 
 async fn summarize_with_retry(
     summarizer: &dyn Summarizer,
+    title: &str,
     text: &str,
     max_chars: usize,
 ) -> Result<String, String> {
-    let first = format_summary(&summarizer.summarize(text, max_chars).await?);
+    let first = format_summary(&summarizer.summarize(title, text, max_chars).await?);
     if first.chars().count() <= max_chars {
         return Ok(first);
     }
 
     // One retry with a tighter budget, then hard-trim.
-    let second = match summarizer.summarize(text, max_chars * 3 / 4).await {
+    let second = match summarizer.summarize(title, text, max_chars / 2).await {
         Ok(text) => format_summary(&text),
         Err(_) => first,
     };
@@ -173,7 +174,6 @@ fn is_internal(base: &str, link: &str) -> bool {
 }
 
 struct Article {
-    title: String,
     text: String,
     attachments: Vec<Attachment>,
 }
@@ -198,20 +198,6 @@ async fn fetch_article(client: &Client, url: &str) -> Result<Article, String> {
 fn parse_article(html: &str, url: &str) -> Article {
     let doc = Html::parse_document(html);
 
-    let heading = Selector::parse("h1.pageHeading span").expect("heading selector");
-    let title_tag = Selector::parse("title").expect("title selector");
-    let title = doc
-        .select(&heading)
-        .next()
-        .map(|el| normalize(&el.text().collect::<String>()))
-        .filter(|title| !title.is_empty())
-        .or_else(|| {
-            doc.select(&title_tag)
-                .next()
-                .map(|el| normalize(&el.text().collect::<String>()))
-        })
-        .unwrap_or_default();
-
     let paragraphs = Selector::parse("p.pageContent, p.pMain").expect("paragraph selector");
     let text = doc
         .select(&paragraphs)
@@ -221,7 +207,6 @@ fn parse_article(html: &str, url: &str) -> Article {
         .join("\n\n");
 
     Article {
-        title,
         text,
         attachments: extract_attachments(&doc, url),
     }
@@ -308,9 +293,12 @@ fn normalize(text: &str) -> String {
 }
 
 fn trim_to(text: &str, max_chars: usize) -> String {
-    text.chars()
-        .take(max_chars)
-        .collect::<String>()
-        .trim_end()
-        .to_string()
+    if text.chars().count() <= max_chars {
+        return text.to_string();
+    }
+    let mut out: String = text.chars().take(max_chars).collect();
+    if let Some(cut) = out.rfind(char::is_whitespace) {
+        out.truncate(cut);
+    }
+    out.trim_end().to_string()
 }

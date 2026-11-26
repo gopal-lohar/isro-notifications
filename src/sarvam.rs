@@ -41,13 +41,14 @@ impl Sarvam {
 impl Summarizer for Sarvam {
     fn summarize<'a>(
         &'a self,
+        title: &'a str,
         text: &'a str,
         max_chars: usize,
     ) -> Pin<Box<dyn Future<Output = Result<String, String>> + Send + 'a>> {
         Box::pin(async move {
             let body = json!({
                 "model": self.model,
-                "messages": [{ "role": "user", "content": prompt(text, max_chars) }],
+                "messages": [{ "role": "user", "content": prompt(title, text, max_chars) }],
                 "temperature": 0.2,
                 "reasoning_effort": null,
                 "max_tokens": (max_chars / 2).clamp(128, 4096),
@@ -79,15 +80,16 @@ impl Summarizer for Sarvam {
     }
 }
 
-fn prompt(text: &str, max_chars: usize) -> String {
+fn prompt(title: &str, text: &str, max_chars: usize) -> String {
     format!(
-        "Summarise this ISRO news article for a notification.\n\
-         Reply with:\n\
-         1. A title on the first line, at most 80 characters.\n\
-         2. One blank line.\n\
-         3. A summary of 2-3 complete sentences.\n\
-         The whole reply must be at most {max_chars} characters.\n\
-         Plain text only: no markdown, no HTML, no bullet points.\n\n\
+        "Format this ISRO update for a notification.\n\
+         Rules:\n\
+         - First line: the title exactly as given below, character for character. Do not rewrite it, do not change its tense or wording.\n\
+         - One blank line.\n\
+         - Then a summary of at most 3 sentences that condenses the article's own sentences. Keep the article's wording, tense and terminology; do not rewrite it like a news report, and do not copy it verbatim.\n\
+         - The whole reply must be at most {max_chars} characters. This is a hard limit.\n\
+         - Plain text only: no markdown, no HTML, no bullet points.\n\n\
+         Title: {title}\n\n\
          Article:\n{text}"
     )
 }

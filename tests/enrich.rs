@@ -125,6 +125,7 @@ impl Fake {
 impl Summarizer for Fake {
     fn summarize<'a>(
         &'a self,
+        _title: &'a str,
         _text: &'a str,
         _max_chars: usize,
     ) -> Pin<Box<dyn Future<Output = Result<String, String>> + Send + 'a>> {
@@ -140,6 +141,7 @@ struct Failing;
 impl Summarizer for Failing {
     fn summarize<'a>(
         &'a self,
+        _title: &'a str,
         _text: &'a str,
         _max_chars: usize,
     ) -> Pin<Box<dyn Future<Output = Result<String, String>> + Send + 'a>> {
@@ -148,9 +150,13 @@ impl Summarizer for Failing {
 }
 
 fn item(link: &str) -> isro_notifications::diff::NewsItem {
+    titled_item("Original title", link)
+}
+
+fn titled_item(title: &str, link: &str) -> isro_notifications::diff::NewsItem {
     isro_notifications::diff::NewsItem {
         kind: Kind::Latest,
-        title: "Original title".to_string(),
+        title: title.to_string(),
         link: Some(link.to_string()),
     }
 }
@@ -237,15 +243,24 @@ async fn internal_link_is_summarised_with_attachments() {
 
 #[tokio::test]
 async fn cached_articles_parse_into_text_and_media() {
-    let names = [
-        "Mission_GSLVF18.html",
-        "Thirtieth_Session_of_the_Intergovernmental_Consultative_Committee.html",
-        "Ground_test_of_third_stage_of_PSLV_PS3.html",
+    let cases = [
+        (
+            "Mission_GSLVF18.html",
+            "GSLV-F18 has successfully placed NVS-03 in the intended orbit.",
+        ),
+        (
+            "Thirtieth_Session_of_the_Intergovernmental_Consultative_Committee.html",
+            "ISRO’s Participation in the Thirtieth Session of the Intergovernmental Consultative Committee (ICC-30)",
+        ),
+        (
+            "Ground_test_of_third_stage_of_PSLV_PS3.html",
+            "Ground test of third stage of PSLV (PS3) conducted successfully",
+        ),
     ];
     let routes: Routes = Arc::new(Mutex::new(
-        names
+        cases
             .iter()
-            .map(|name| (format!("/{name}"), (200, article(name))))
+            .map(|(name, _)| (format!("/{name}"), (200, article(name))))
             .collect(),
     ));
     let last: LastRequest = Arc::new(Mutex::new(None));
@@ -253,7 +268,7 @@ async fn cached_articles_parse_into_text_and_media() {
     let cfg = Config::new(format!("http://{addr}"));
     let fake = Fake::new("Title\n\nSummary.");
 
-    for name in names {
+    for (name, _) in cases {
         let updates = enrich::enrich(
             &reqwest::Client::new(),
             &[item(&format!("http://{addr}/{name}"))],
@@ -373,15 +388,24 @@ async fn real_sarvam_summary() {
     let Ok(key) = std::env::var("SARVAM_API_KEY") else {
         panic!("SARVAM_API_KEY not set");
     };
-    let names = [
-        "Mission_GSLVF18.html",
-        "Thirtieth_Session_of_the_Intergovernmental_Consultative_Committee.html",
-        "Ground_test_of_third_stage_of_PSLV_PS3.html",
+    let cases = [
+        (
+            "Mission_GSLVF18.html",
+            "GSLV-F18 has successfully placed NVS-03 in the intended orbit.",
+        ),
+        (
+            "Thirtieth_Session_of_the_Intergovernmental_Consultative_Committee.html",
+            "ISRO’s Participation in the Thirtieth Session of the Intergovernmental Consultative Committee (ICC-30)",
+        ),
+        (
+            "Ground_test_of_third_stage_of_PSLV_PS3.html",
+            "Ground test of third stage of PSLV (PS3) conducted successfully",
+        ),
     ];
     let routes: Routes = Arc::new(Mutex::new(
-        names
+        cases
             .iter()
-            .map(|name| (format!("/{name}"), (200, article(name))))
+            .map(|(name, _)| (format!("/{name}"), (200, article(name))))
             .collect(),
     ));
     let last: LastRequest = Arc::new(Mutex::new(None));
@@ -389,17 +413,21 @@ async fn real_sarvam_summary() {
     let cfg = Config::new(format!("http://{addr}"));
     let sarvam = Sarvam::new(reqwest::Client::new(), key);
 
-    for name in names {
+    for (name, title) in cases {
         let updates = enrich::enrich(
             &reqwest::Client::new(),
-            &[item(&format!("http://{addr}/{name}"))],
+            &[titled_item(title, &format!("http://{addr}/{name}"))],
             &cfg,
             Some(&sarvam),
         )
         .await;
 
         println!("--- {name}\n{}\n", updates[0].text);
-        assert!(!updates[0].text.is_empty(), "{name}");
+        assert_eq!(
+            updates[0].text.lines().next(),
+            Some(title),
+            "{name} title was rewritten"
+        );
         assert!(
             updates[0].text.chars().count() <= cfg.max_chars,
             "{name} summary too long"
@@ -420,7 +448,10 @@ async fn sarvam_client_sends_key_and_model() {
 
     let sarvam = Sarvam::new(reqwest::Client::new(), "test-key")
         .with_endpoint(format!("http://{addr}/v1/chat/completions"));
-    let summary = sarvam.summarize("Some article text", 1024).await.unwrap();
+    let summary = sarvam
+        .summarize("Original title", "Some article text", 1024)
+        .await
+        .unwrap();
 
     assert_eq!(summary, "Title line\n\nShort summary.");
 
@@ -434,6 +465,8 @@ async fn sarvam_client_sends_key_and_model() {
             .any(|(k, v)| k == "api-subscription-key" && v == "test-key")
     );
     assert!(captured.body.contains("sarvam-105b"));
+    assert!(captured.body.contains("Original title"));
+    assert!(captured.body.contains("exactly as given"));
     assert!(captured.body.contains("Some article text"));
     assert!(captured.body.contains("1024 characters"));
 }

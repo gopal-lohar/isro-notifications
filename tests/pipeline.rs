@@ -49,6 +49,7 @@ struct Fake(&'static str);
 impl Summarizer for Fake {
     fn summarize<'a>(
         &'a self,
+        _title: &'a str,
         _text: &'a str,
         _max_chars: usize,
     ) -> Pin<Box<dyn Future<Output = Result<String, String>> + Send + 'a>> {
