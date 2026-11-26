@@ -66,7 +66,7 @@ function render(data) {
         ${update.attachments ? `<p class="muted">${update.attachments} attachment(s)</p>` : ""}
       </article>`,
       )
-      .join("") || '<p class="muted">No updates yet.</p>';
+      .join("") || '<p class="muted empty">No updates yet.</p>';
 }
 
 async function refresh() {

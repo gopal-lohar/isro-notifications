@@ -130,6 +130,10 @@ main {
   font-weight: 500;
 }
 
+#status {
+  text-transform: uppercase;
+}
+
 .value.ok {
   color: var(--ok);
 }
@@ -224,6 +228,11 @@ tbody tr:nth-child(even) {
 
 .muted {
   color: var(--muted);
+}
+
+.empty {
+  padding: 48px 0;
+  text-align: center;
 }
 
 .ghost {
