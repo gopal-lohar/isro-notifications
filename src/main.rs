@@ -1,6 +1,8 @@
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use isro_notifications::analytics::Analytics;
 use isro_notifications::config::{self, Config};
 use isro_notifications::diff;
 use isro_notifications::enrich::{self, Summarizer};
@@ -9,7 +11,8 @@ use isro_notifications::pipeline::{Deliverer, NoopDeliverer, Pipeline};
 use isro_notifications::sarvam::Sarvam;
 use isro_notifications::scrapper;
 use isro_notifications::telegram::{Telegram, TelegramConfig};
-use tracing::{info, warn};
+use isro_notifications::web::{self, WebState};
+use tracing::{error, info, warn};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -19,6 +22,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let path = std::env::var("CONFIG_PATH").unwrap_or_else(|_| config::DEFAULT_PATH.into());
     let config = Config::load(Path::new(&path))?;
 
+    let analytics = Arc::new(Mutex::new(Analytics::new()));
     let client = scrapper::client();
     let summarizer = std::env::var("SARVAM_API_KEY")
         .ok()
@@ -51,6 +55,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             concurrency: config.summary.concurrency,
         },
         config.telegram.alerts.clone(),
+        analytics.clone(),
         summarizer,
         deliverer,
     );
@@ -66,6 +71,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 tokio::time::sleep(Duration::from_secs(60)).await;
             }
         });
+    }
+
+    let bind = std::env::var("ANALYTICS_BIND").unwrap_or_else(|_| "127.0.0.1:8080".into());
+    if !bind.trim().is_empty() {
+        match bind.parse::<std::net::SocketAddr>() {
+            Ok(addr) => match tokio::net::TcpListener::bind(addr).await {
+                Ok(listener) => {
+                    let state = WebState {
+                        analytics: analytics.clone(),
+                        telegram: telegram.clone(),
+                        admin_username: config.telegram.admin_username.clone(),
+                    };
+                    tokio::spawn(async move {
+                        if let Err(error) = web::serve(listener, state).await {
+                            error!(%error, "analytics server stopped");
+                        }
+                    });
+                    info!(%addr, "analytics server listening");
+                }
+                Err(error) => error!(%error, %addr, "analytics bind failed"),
+            },
+            Err(error) => error!(%error, "invalid ANALYTICS_BIND"),
+        }
     }
 
     info!(

@@ -1,3 +1,4 @@
+pub mod analytics;
 pub mod config;
 pub mod diff;
 pub mod enrich;
@@ -7,3 +8,4 @@ pub mod registry;
 pub mod sarvam;
 pub mod scrapper;
 pub mod telegram;
+pub mod web;

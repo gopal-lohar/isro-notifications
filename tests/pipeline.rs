@@ -3,6 +3,7 @@ use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
+use isro_notifications::analytics::Analytics;
 use isro_notifications::config::Alerts;
 use isro_notifications::enrich::{Config, Summarizer, Update};
 use isro_notifications::fetcher::{FetchEvent, Snapshot};
@@ -83,6 +84,7 @@ fn pipeline(rec: &Recording, summarizer: Option<Box<dyn Summarizer>>, base_url: 
             concurrency: 4,
         },
         Alerts::default(),
+        Arc::new(Mutex::new(Analytics::new())),
         summarizer,
         Box::new(rec.clone()),
     )

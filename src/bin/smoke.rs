@@ -1,6 +1,8 @@
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
+
+use isro_notifications::analytics::Analytics;
 use std::time::Duration;
 
 use isro_notifications::config::{self, Config};
@@ -57,6 +59,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         return Err("no active chats: send /start to the bot, then run again".into());
     }
 
+    let analytics = Arc::new(Mutex::new(Analytics::new()));
     let pipeline = Pipeline::new(
         client.clone(),
         enrich::Config {
@@ -65,6 +68,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             concurrency: config.summary.concurrency,
         },
         config.telegram.alerts.clone(),
+        analytics,
         Some(Box::new(Sarvam::new(client.clone(), sarvam_key)) as Box<dyn Summarizer>),
         Box::new(telegram),
     );

@@ -1,9 +1,11 @@
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::{Arc, Mutex};
 
 use reqwest::Client;
 use tracing::{debug, error, info};
 
+use crate::analytics::Analytics;
 use crate::config::Alerts;
 use crate::diff::{self, DiffEvent};
 use crate::enrich::{self, Summarizer, Update};
@@ -43,6 +45,7 @@ pub struct Pipeline {
     client: Client,
     enrich: enrich::Config,
     alerts: Alerts,
+    analytics: Arc<Mutex<Analytics>>,
     summarizer: Option<Box<dyn Summarizer>>,
     deliverer: Box<dyn Deliverer>,
 }
@@ -52,6 +55,7 @@ impl Pipeline {
         client: Client,
         enrich: enrich::Config,
         alerts: Alerts,
+        analytics: Arc<Mutex<Analytics>>,
         summarizer: Option<Box<dyn Summarizer>>,
         deliverer: Box<dyn Deliverer>,
     ) -> Self {
@@ -59,6 +63,7 @@ impl Pipeline {
             client,
             enrich,
             alerts,
+            analytics,
             summarizer,
             deliverer,
         }
@@ -75,14 +80,17 @@ impl Pipeline {
         match event {
             FetchEvent::Baseline { checksum } => {
                 info!(%checksum, "baseline snapshot stored");
+                self.analytics.lock().unwrap().record_run("ok");
                 Vec::new()
             }
             FetchEvent::Unchanged { checksum } => {
                 debug!(%checksum, "no change");
+                self.analytics.lock().unwrap().record_run("ok");
                 Vec::new()
             }
             FetchEvent::Failed { error } => {
                 error!(%error, "fetch failed");
+                self.analytics.lock().unwrap().record_run("fetch failed");
                 self.alert(&self.alerts.fetch_failed.replace("{error}", &error))
                     .await;
                 Vec::new()
@@ -92,12 +100,14 @@ impl Pipeline {
                 match diff::compare(&previous.body, &current.body, &self.enrich.base_url) {
                     DiffEvent::Failure { message } => {
                         error!(%message, "site failure");
+                        self.analytics.lock().unwrap().record_run("site failure");
                         self.alert(&self.alerts.site_failure.replace("{message}", &message))
                             .await;
                         Vec::new()
                     }
                     DiffEvent::NoNews => {
                         info!("page changed but no new news");
+                        self.analytics.lock().unwrap().record_run("ok");
                         Vec::new()
                     }
                     DiffEvent::News { items } => {
@@ -110,12 +120,16 @@ impl Pipeline {
                         .await;
                         for update in &updates {
                             match self.deliverer.deliver(update).await {
-                                Ok(()) => info!(kind = ?update.kind, "delivered: {}", update),
+                                Ok(()) => {
+                                    info!(kind = ?update.kind, "delivered: {}", update);
+                                    self.analytics.lock().unwrap().record_update(update);
+                                }
                                 Err(error) => {
                                     error!(%error, kind = ?update.kind, "delivery failed: {}", update)
                                 }
                             }
                         }
+                        self.analytics.lock().unwrap().record_run("ok");
                         updates
                     }
                 }

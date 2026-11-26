@@ -80,6 +80,10 @@ impl Telegram {
         self.inner.registry.lock().unwrap().active().count()
     }
 
+    pub fn chats(&self) -> Vec<Chat> {
+        self.inner.registry.lock().unwrap().chats.clone()
+    }
+
     /// Drain pending `getUpdates` and merge new chats into the registry.
     pub async fn poll_updates(&self) -> Result<usize, String> {
         let offset = self.inner.registry.lock().unwrap().offset;
