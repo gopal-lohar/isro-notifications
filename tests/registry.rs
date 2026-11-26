@@ -48,7 +48,7 @@ fn save_and_load_roundtrip() {
         offset: 42,
         chats: Vec::new(),
     };
-    registry.upsert(chat(7, "alice", "Alice Smith"));
+    registry.upsert(chat(7, "alice", "Alice"));
     registry.save(&path).unwrap();
 
     let loaded = Registry::load(&path);
@@ -57,7 +57,7 @@ fn save_and_load_roundtrip() {
 
     let text = std::fs::read_to_string(&path).unwrap();
     assert!(text.contains("\"username\": \"alice\""));
-    assert!(text.contains("\"name\": \"Alice Smith\""));
+    assert!(text.contains("\"name\": \"Alice\""));
 
     std::fs::remove_file(&path).unwrap();
 }

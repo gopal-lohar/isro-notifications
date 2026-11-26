@@ -9,7 +9,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let url = std::env::args()
         .nth(1)
         .unwrap_or_else(|| "https://www.isro.gov.in".into());
-    let dir = PathBuf::from(std::env::var("CAHCE_DIR").unwrap_or_else(|_| "./".into()));
+    let dir = PathBuf::from(std::env::var("CACHE_DIR").unwrap_or_else(|_| "./".into()));
 
     let path = scrapper::fetch(&scrapper::client(), &url, &dir).await?;
     println!("{}", path.display());

@@ -73,7 +73,7 @@ fn committed_config_parses() {
     let config = Config::load(&path).unwrap();
 
     assert!(!config.isro.url.is_empty());
-    assert!(config.telegram.admin_username.is_some());
+    assert!(!config.telegram.welcome.is_empty());
 }
 
 #[test]

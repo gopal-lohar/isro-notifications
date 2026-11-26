@@ -10,7 +10,7 @@ summary:
 
 telegram:
   registry: ./.state/telegram.json
-  admin_username: alice
+  # admin_username: your_username
   welcome: "👋 You're subscribed. ISRO updates will arrive here."
   concurrency: 2
   alerts:
