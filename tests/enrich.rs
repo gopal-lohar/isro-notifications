@@ -313,6 +313,25 @@ async fn summary_without_blank_line_is_reformatted() {
 }
 
 #[tokio::test]
+async fn passthrough_title_shares_the_budget_with_the_link() {
+    let cfg = Config {
+        max_chars: 100,
+        base_url: "https://www.isro.gov.in".to_string(),
+    };
+    let link = "https://example.com/a-link-that-eats-some-budget.html";
+    let updates = enrich::enrich(
+        &reqwest::Client::new(),
+        &[titled_item(&"x".repeat(200), link)],
+        &cfg,
+        None,
+    )
+    .await;
+
+    let total = updates[0].text.chars().count() + 2 + link.chars().count();
+    assert!(total <= cfg.max_chars, "total {total} exceeds budget");
+}
+
+#[tokio::test]
 async fn long_summary_is_retried_then_trimmed() {
     let name = "Ground_test_of_third_stage_of_PSLV_PS3.html";
     let routes: Routes = Arc::new(Mutex::new(HashMap::from([(
@@ -336,7 +355,10 @@ async fn long_summary_is_retried_then_trimmed() {
     .await;
 
     assert_eq!(fake.calls(), 2);
-    assert_eq!(updates[0].text.chars().count(), 100);
+    let link = updates[0].link.as_deref().unwrap();
+    let total = updates[0].text.chars().count() + 2 + link.chars().count();
+    assert!(total <= cfg.max_chars, "total {total} exceeds budget");
+    assert!(!updates[0].text.is_empty());
 }
 
 #[tokio::test]
@@ -428,10 +450,9 @@ async fn real_sarvam_summary() {
             Some(title),
             "{name} title was rewritten"
         );
-        assert!(
-            updates[0].text.chars().count() <= cfg.max_chars,
-            "{name} summary too long"
-        );
+        let link = updates[0].link.as_deref().unwrap();
+        let total = updates[0].text.chars().count() + 2 + link.chars().count();
+        assert!(total <= cfg.max_chars, "{name} message too long: {total}");
         assert!(!updates[0].attachments.is_empty(), "{name}");
     }
 }

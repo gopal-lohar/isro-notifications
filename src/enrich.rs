@@ -102,28 +102,30 @@ async fn enrich_one(
     summarizer: Option<&dyn Summarizer>,
 ) -> Update {
     let Some(link) = item.link.as_deref() else {
-        return passthrough(item);
+        return passthrough(item, cfg.max_chars);
     };
+    // The link is appended to the message, so it shares the character budget.
+    let budget = cfg.max_chars.saturating_sub(link.chars().count() + 2);
     let Some(summarizer) = summarizer else {
-        return passthrough(item);
+        return passthrough(item, budget);
     };
     if !is_internal(&cfg.base_url, link) {
-        return passthrough(item);
+        return passthrough(item, budget);
     }
 
     let article = match fetch_article(client, link).await {
         Ok(article) => article,
         Err(error) => {
             warn!(%link, %error, "article fetch failed, sending link only");
-            return passthrough(item);
+            return passthrough(item, budget);
         }
     };
 
-    let text = match summarize_with_retry(summarizer, &item.title, &article.text, cfg.max_chars).await {
+    let text = match summarize_with_retry(summarizer, &item.title, &article.text, budget).await {
         Ok(text) => text,
         Err(error) => {
             warn!(%link, %error, "summary failed, sending link only");
-            return passthrough(item);
+            return passthrough(item, budget);
         }
     };
 
@@ -135,11 +137,11 @@ async fn enrich_one(
     }
 }
 
-fn passthrough(item: &NewsItem) -> Update {
+fn passthrough(item: &NewsItem, budget: usize) -> Update {
     Update {
         kind: item.kind,
         link: item.link.clone(),
-        text: item.title.clone(),
+        text: trim_to(&item.title, budget),
         attachments: Vec::new(),
     }
 }
