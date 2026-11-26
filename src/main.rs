@@ -3,10 +3,11 @@ use std::time::Duration;
 use isro_notifications::diff;
 use isro_notifications::enrich::{self, Summarizer};
 use isro_notifications::fetcher::Fetcher;
-use isro_notifications::pipeline::{LogDeliverer, Pipeline};
+use isro_notifications::pipeline::{Deliverer, LogDeliverer, Pipeline};
 use isro_notifications::sarvam::Sarvam;
 use isro_notifications::scrapper;
-use tracing::info;
+use isro_notifications::telegram::{Telegram, TelegramConfig};
+use tracing::{info, warn};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -29,6 +30,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .map(|key| Box::new(Sarvam::new(client.clone(), key)) as Box<dyn Summarizer>);
     let has_summarizer = summarizer.is_some();
 
+    let telegram = std::env::var("TELEGRAM_BOT_TOKEN")
+        .ok()
+        .filter(|token| !token.trim().is_empty())
+        .map(|token| {
+            let registry = std::env::var("TELEGRAM_REGISTRY")
+                .unwrap_or_else(|_| "./.state/telegram.json".into());
+            let mut config = TelegramConfig::new(token, registry);
+            if let Ok(api) = std::env::var("TELEGRAM_API") {
+                config.api = api;
+            }
+            Telegram::new(client.clone(), config)
+        });
+
+    let deliverer: Box<dyn Deliverer> = match &telegram {
+        Some(telegram) => Box::new(telegram.clone()),
+        None => Box::new(LogDeliverer),
+    };
+
     let pipeline = Pipeline::new(
         client.clone(),
         enrich::Config {
@@ -36,13 +55,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             base_url,
         },
         summarizer,
-        Box::new(LogDeliverer),
+        deliverer,
     );
+
+    if let Some(telegram) = telegram.clone() {
+        tokio::spawn(async move {
+            loop {
+                match telegram.poll_updates().await {
+                    Ok(0) => {}
+                    Ok(added) => info!(added, "registered new telegram chats"),
+                    Err(error) => warn!(%error, "telegram getUpdates failed"),
+                }
+                tokio::time::sleep(Duration::from_secs(60)).await;
+            }
+        });
+    }
 
     info!(
         %url,
         interval_secs = interval.as_secs(),
         summarizer = has_summarizer,
+        telegram = telegram.is_some(),
         "starting isro-notifications"
     );
 

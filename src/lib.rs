@@ -2,5 +2,7 @@ pub mod diff;
 pub mod enrich;
 pub mod fetcher;
 pub mod pipeline;
+pub mod registry;
 pub mod sarvam;
 pub mod scrapper;
+pub mod telegram;
