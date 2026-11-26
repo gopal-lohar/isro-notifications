@@ -1,6 +1,7 @@
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 
+use isro_notifications::diff::{self, DiffEvent};
 use isro_notifications::fetcher::{FetchEvent, Fetcher};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -45,13 +46,6 @@ fn dev(name: &str) -> Vec<u8> {
     std::fs::read(&path).unwrap_or_else(|e| panic!("read {path}: {e}"))
 }
 
-fn validate(body: &[u8]) -> Result<(), String> {
-    if body.len() < 512 {
-        return Err("response too small".into());
-    }
-    Ok(())
-}
-
 #[tokio::test]
 async fn fetcher_reports_baseline_change_and_failures() {
     let a = dev("isro-2026-09-06-16-42-25.html");
@@ -61,7 +55,11 @@ async fn fetcher_reports_baseline_change_and_failures() {
         body: a,
     }));
     let addr = serve(state.clone()).await;
-    let mut fetcher = Fetcher::new(reqwest::Client::new(), format!("http://{addr}/"), validate);
+    let mut fetcher = Fetcher::new(
+        reqwest::Client::new(),
+        format!("http://{addr}/"),
+        diff::validate,
+    );
 
     assert!(matches!(fetcher.poll().await, FetchEvent::Baseline { .. }));
     assert!(matches!(fetcher.poll().await, FetchEvent::Unchanged { .. }));
@@ -70,7 +68,11 @@ async fn fetcher_reports_baseline_change_and_failures() {
     let FetchEvent::Changed { previous, current } = fetcher.poll().await else {
         panic!("expected a change");
     };
-    assert_ne!(previous.checksum, current.checksum);
+    let DiffEvent::News { items } = diff::compare(&previous.body, &current.body, "https://www.isro.gov.in")
+    else {
+        panic!("expected news");
+    };
+    assert_eq!(items.len(), 5);
 
     // HTTP error: reported, cache untouched.
     state.lock().unwrap().status = 500;
@@ -93,7 +95,11 @@ async fn fetcher_reports_download_failure() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         listener.local_addr().unwrap()
     };
-    let mut fetcher = Fetcher::new(reqwest::Client::new(), format!("http://{addr}/"), validate);
+    let mut fetcher = Fetcher::new(
+        reqwest::Client::new(),
+        format!("http://{addr}/"),
+        diff::validate,
+    );
 
     assert!(matches!(fetcher.poll().await, FetchEvent::Failed { .. }));
     assert!(fetcher.last().is_none());
@@ -106,7 +112,11 @@ async fn invalid_first_response_is_not_cached() {
         body: b"<html><body>Access Denied</body></html>".to_vec(),
     }));
     let addr = serve(state.clone()).await;
-    let mut fetcher = Fetcher::new(reqwest::Client::new(), format!("http://{addr}/"), validate);
+    let mut fetcher = Fetcher::new(
+        reqwest::Client::new(),
+        format!("http://{addr}/"),
+        diff::validate,
+    );
 
     assert!(matches!(fetcher.poll().await, FetchEvent::Failed { .. }));
     assert!(fetcher.last().is_none());
