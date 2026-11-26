@@ -42,7 +42,6 @@ header {
   display: flex;
   align-items: center;
   gap: 24px;
-  height: 56px;
   padding: 0 24px;
   background: var(--bg);
 }
@@ -68,14 +67,13 @@ header {
 
 nav {
   display: flex;
-  height: 100%;
   margin-right: auto;
 }
 
 nav button {
-  height: 100%;
-  padding: 0 14px;
+  padding: 20px 16px;
   border: 0;
+  border-bottom: 2px solid transparent;
   background: none;
   color: var(--muted);
   font: inherit;
@@ -88,7 +86,7 @@ nav button:hover {
 
 nav button.active {
   color: var(--text);
-  border-bottom: 2px solid var(--yellow);
+  border-bottom-color: var(--yellow);
 }
 
 main {
