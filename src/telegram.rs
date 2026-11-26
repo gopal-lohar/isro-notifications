@@ -23,6 +23,8 @@ pub struct TelegramConfig {
     pub api: String,
     /// Username (without @) that also receives failure alerts.
     pub admin_username: Option<String>,
+    /// Reply sent when a user sends /start.
+    pub welcome: String,
 }
 
 impl TelegramConfig {
@@ -32,6 +34,7 @@ impl TelegramConfig {
             registry_path: registry_path.into(),
             api: DEFAULT_API.to_string(),
             admin_username: None,
+            welcome: WELCOME.to_string(),
         }
     }
 }
@@ -48,6 +51,7 @@ struct Inner {
     registry_path: PathBuf,
     registry: Mutex<Registry>,
     admin_username: Option<String>,
+    welcome: String,
 }
 
 impl Telegram {
@@ -61,6 +65,7 @@ impl Telegram {
                 registry_path: config.registry_path,
                 registry: Mutex::new(registry),
                 admin_username: config.admin_username,
+                welcome: config.welcome,
             }),
         }
     }
@@ -142,7 +147,7 @@ impl Telegram {
         }
 
         for chat_id in welcomes {
-            if let Err(error) = self.send_message(chat_id, WELCOME).await {
+            if let Err(error) = self.send_message(chat_id, &self.inner.welcome).await {
                 warn!(chat_id, "welcome message failed: {}", error.message);
             }
         }

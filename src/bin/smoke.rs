@@ -1,7 +1,9 @@
 use std::net::SocketAddr;
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use isro_notifications::config::{self, Config};
 use isro_notifications::diff;
 use isro_notifications::enrich::{self, Summarizer};
 use isro_notifications::fetcher::{FetchEvent, Fetcher};
@@ -27,21 +29,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // baseline, update, no change, no change, update, no change
     let sequence = vec![a, b.clone(), b.clone(), b, c.clone(), c];
     let addr = serve(sequence).await;
-    let url = format!("http://{addr}/");
+
+    let path = std::env::var("CONFIG_PATH").unwrap_or_else(|_| config::DEFAULT_PATH.into());
+    let mut config = Config::load(Path::new(&path))?;
+    config.isro.url = format!("http://{addr}/");
+    config.isro.base_url = "https://www.isro.gov.in".into();
+    if let Ok(api) = std::env::var("TELEGRAM_API") {
+        config.telegram.api = api;
+    }
 
     let client = scrapper::client();
-    let sarvam_key = std::env::var("SARVAM_API_KEY")
-        .map_err(|_| "SARVAM_API_KEY not set")?;
-    let token = std::env::var("TELEGRAM_BOT_TOKEN")
-        .map_err(|_| "TELEGRAM_BOT_TOKEN not set")?;
-    let registry = std::env::var("TELEGRAM_REGISTRY")
-        .unwrap_or_else(|_| "./.state/telegram.json".into());
+    let sarvam_key = std::env::var("SARVAM_API_KEY").map_err(|_| "SARVAM_API_KEY not set")?;
+    let token = std::env::var("TELEGRAM_BOT_TOKEN").map_err(|_| "TELEGRAM_BOT_TOKEN not set")?;
 
-    let mut config = TelegramConfig::new(token, registry);
-    if let Ok(api) = std::env::var("TELEGRAM_API") {
-        config.api = api;
-    }
-    let telegram = Telegram::new(client.clone(), config);
+    let mut telegram_config = TelegramConfig::new(token, &config.telegram.registry);
+    telegram_config.api = config.telegram.api.clone();
+    telegram_config.admin_username = config.telegram.admin_username.clone();
+    telegram_config.welcome = config.telegram.welcome.clone();
+    let telegram = Telegram::new(client.clone(), telegram_config);
+
     let added = telegram.poll_updates().await?;
     if added > 0 {
         info!(added, "registered new chats");
@@ -53,14 +59,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let pipeline = Pipeline::new(
         client.clone(),
         enrich::Config {
-            max_chars: 1024,
-            base_url: "https://www.isro.gov.in".into(),
+            max_chars: config.summary.max_chars,
+            base_url: config.isro.base_url.clone(),
         },
+        config.telegram.alerts.clone(),
         Some(Box::new(Sarvam::new(client.clone(), sarvam_key)) as Box<dyn Summarizer>),
         Box::new(telegram),
     );
 
-    let mut fetcher = Fetcher::new(client, url, diff::validate);
+    let mut fetcher = Fetcher::new(client, config.isro.url.clone(), diff::validate);
     let mut outcomes = Vec::new();
     for check in 0..CHECKS {
         let event = fetcher.poll().await;

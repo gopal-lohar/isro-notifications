@@ -1,0 +1,15 @@
+isro:
+  url: https://www.isro.gov.in
+  base_url: https://www.isro.gov.in
+  poll_interval_secs: 1800
+
+summary:
+  max_chars: 1024
+
+telegram:
+  registry: ./.state/telegram.json
+  # admin_username: alice
+  welcome: "👋 You're subscribed. ISRO updates will arrive here."
+  alerts:
+    fetch_failed: "fetch failed: {error}"
+    site_failure: "site failure: {message}"

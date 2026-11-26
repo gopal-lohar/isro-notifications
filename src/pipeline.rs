@@ -4,6 +4,7 @@ use std::pin::Pin;
 use reqwest::Client;
 use tracing::{debug, error, info};
 
+use crate::config::Alerts;
 use crate::diff::{self, DiffEvent};
 use crate::enrich::{self, Summarizer, Update};
 use crate::fetcher::FetchEvent;
@@ -43,6 +44,7 @@ impl Deliverer for LogDeliverer {
 pub struct Pipeline {
     client: Client,
     enrich: enrich::Config,
+    alerts: Alerts,
     summarizer: Option<Box<dyn Summarizer>>,
     deliverer: Box<dyn Deliverer>,
 }
@@ -51,12 +53,14 @@ impl Pipeline {
     pub fn new(
         client: Client,
         enrich: enrich::Config,
+        alerts: Alerts,
         summarizer: Option<Box<dyn Summarizer>>,
         deliverer: Box<dyn Deliverer>,
     ) -> Self {
         Self {
             client,
             enrich,
+            alerts,
             summarizer,
             deliverer,
         }
@@ -81,7 +85,8 @@ impl Pipeline {
             }
             FetchEvent::Failed { error } => {
                 error!(%error, "fetch failed");
-                self.alert(&format!("fetch failed: {error}")).await;
+                self.alert(&self.alerts.fetch_failed.replace("{error}", &error))
+                    .await;
                 Vec::new()
             }
             FetchEvent::Changed { previous, current } => {
@@ -89,7 +94,8 @@ impl Pipeline {
                 match diff::compare(&previous.body, &current.body, &self.enrich.base_url) {
                     DiffEvent::Failure { message } => {
                         error!(%message, "site failure");
-                        self.alert(&format!("site failure: {message}")).await;
+                        self.alert(&self.alerts.site_failure.replace("{message}", &message))
+                            .await;
                         Vec::new()
                     }
                     DiffEvent::NoNews => {

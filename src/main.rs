@@ -1,5 +1,7 @@
+use std::path::Path;
 use std::time::Duration;
 
+use isro_notifications::config::{self, Config};
 use isro_notifications::diff;
 use isro_notifications::enrich::{self, Summarizer};
 use isro_notifications::fetcher::Fetcher;
@@ -14,14 +16,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     dotenvy::dotenv().ok();
     init_tracing();
 
-    let url = std::env::var("ISRO_URL").unwrap_or_else(|_| "https://www.isro.gov.in".into());
-    let base_url = std::env::var("ISRO_BASE_URL").unwrap_or_else(|_| url.clone());
-    let interval = Duration::from_secs(
-        std::env::var("POLL_INTERVAL_SECS")
-            .ok()
-            .and_then(|value| value.parse().ok())
-            .unwrap_or(30 * 60),
-    );
+    let path = std::env::var("CONFIG_PATH").unwrap_or_else(|_| config::DEFAULT_PATH.into());
+    let config = Config::load(Path::new(&path))?;
 
     let client = scrapper::client();
     let summarizer = std::env::var("SARVAM_API_KEY")
@@ -34,17 +30,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .ok()
         .filter(|token| !token.trim().is_empty())
         .map(|token| {
-            let registry = std::env::var("TELEGRAM_REGISTRY")
-                .unwrap_or_else(|_| "./.state/telegram.json".into());
-            let mut config = TelegramConfig::new(token, registry);
-            if let Ok(api) = std::env::var("TELEGRAM_API") {
-                config.api = api;
-            }
-            config.admin_username = std::env::var("TELEGRAM_ADMIN_USERNAME")
-                .ok()
-                .map(|value| value.trim().trim_start_matches('@').to_string())
-                .filter(|value| !value.is_empty());
-            Telegram::new(client.clone(), config)
+            let mut telegram = TelegramConfig::new(token, &config.telegram.registry);
+            telegram.api = config.telegram.api.clone();
+            telegram.admin_username = config.telegram.admin_username.clone();
+            telegram.welcome = config.telegram.welcome.clone();
+            Telegram::new(client.clone(), telegram)
         });
 
     let deliverer: Box<dyn Deliverer> = match &telegram {
@@ -55,9 +45,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let pipeline = Pipeline::new(
         client.clone(),
         enrich::Config {
-            max_chars: env_parse("SUMMARY_MAX_CHARS", 1024),
-            base_url,
+            max_chars: config.summary.max_chars,
+            base_url: config.isro.base_url.clone(),
         },
+        config.telegram.alerts.clone(),
         summarizer,
         deliverer,
     );
@@ -76,15 +67,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     }
 
     info!(
-        %url,
-        interval_secs = interval.as_secs(),
+        url = %config.isro.url,
+        interval_secs = config.isro.poll_interval_secs,
         summarizer = has_summarizer,
         telegram = telegram.is_some(),
         "starting isro-notifications"
     );
 
-    let mut fetcher = Fetcher::new(client, url, diff::validate);
-    let mut tick = tokio::time::interval(interval);
+    let mut fetcher = Fetcher::new(client, config.isro.url.clone(), diff::validate);
+    let mut tick = tokio::time::interval(Duration::from_secs(
+        config.isro.poll_interval_secs.max(1),
+    ));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
     loop {
@@ -100,13 +93,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     }
 
     Ok(())
-}
-
-fn env_parse<T: std::str::FromStr>(key: &str, default: T) -> T {
-    std::env::var(key)
-        .ok()
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(default)
 }
 
 fn init_tracing() {
