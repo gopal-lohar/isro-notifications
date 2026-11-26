@@ -128,10 +128,14 @@ fn write_registry(path: &Path, chats: &[Chat]) {
 }
 
 fn chat(id: i64) -> Chat {
+    chat_with(id, "alice")
+}
+
+fn chat_with(id: i64, username: &str) -> Chat {
     Chat {
         chat_id: id,
-        username: Some("alice".to_string()),
-        name: "Alice Smith".to_string(),
+        username: Some(username.to_string()),
+        name: username.to_string(),
         active: true,
     }
 }
@@ -283,19 +287,36 @@ async fn alert_goes_only_to_the_admin() {
     let last: Requests = Arc::new(Mutex::new(Vec::new()));
     let addr = serve(routes, last.clone()).await;
     let path = temp("alert");
-    write_registry(&path, &[chat(42), chat(99)]);
+    write_registry(&path, &[chat_with(42, "alice"), chat_with(99, "other")]);
     let mut config = TelegramConfig::new("test-token", &path);
     config.api = format!("http://{addr}");
-    config.admin_chat_id = Some(99);
+    config.admin_username = Some("Alice".to_string());
     let telegram = Telegram::new(reqwest::Client::new(), config);
 
     telegram.alert("fetch failed: HTTP 503").await.unwrap();
 
     let captured = last.lock().unwrap().last().cloned().unwrap();
     assert!(captured.path.ends_with("/sendMessage"));
-    assert!(captured.body.contains("\"chat_id\":99"));
-    assert!(!captured.body.contains("\"chat_id\":42"));
+    assert!(captured.body.contains("\"chat_id\":42"));
+    assert!(!captured.body.contains("\"chat_id\":99"));
     assert!(captured.body.contains("fetch failed: HTTP 503"));
+
+    std::fs::remove_file(&path).unwrap();
+}
+
+#[tokio::test]
+async fn alert_with_unregistered_admin_is_an_error() {
+    let routes = routes([("sendMessage", (200, r#"{"ok":true,"result":{}}"#))]);
+    let last: Requests = Arc::new(Mutex::new(Vec::new()));
+    let addr = serve(routes, last).await;
+    let path = temp("alert-missing");
+    write_registry(&path, &[chat_with(42, "alice")]);
+    let mut config = TelegramConfig::new("test-token", &path);
+    config.api = format!("http://{addr}");
+    config.admin_username = Some("nobody".to_string());
+    let telegram = Telegram::new(reqwest::Client::new(), config);
+
+    assert!(telegram.alert("boom").await.is_err());
 
     std::fs::remove_file(&path).unwrap();
 }
