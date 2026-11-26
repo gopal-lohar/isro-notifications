@@ -1,18 +1,12 @@
 use std::time::Duration;
 
-use isro_notifications::diff::{self, DiffEvent};
+use isro_notifications::diff;
 use isro_notifications::enrich::{self, Summarizer};
-use isro_notifications::fetcher::{FetchEvent, Fetcher};
+use isro_notifications::fetcher::Fetcher;
+use isro_notifications::pipeline::{LogDeliverer, Pipeline};
 use isro_notifications::sarvam::Sarvam;
 use isro_notifications::scrapper;
-use reqwest::Client;
-use tracing::{debug, error, info};
-
-struct App {
-    client: Client,
-    enrich: enrich::Config,
-    summarizer: Option<Box<dyn Summarizer>>,
-}
+use tracing::info;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -20,6 +14,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     init_tracing();
 
     let url = std::env::var("ISRO_URL").unwrap_or_else(|_| "https://www.isro.gov.in".into());
+    let base_url = std::env::var("ISRO_BASE_URL").unwrap_or_else(|_| url.clone());
     let interval = Duration::from_secs(
         std::env::var("POLL_INTERVAL_SECS")
             .ok()
@@ -32,20 +27,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .ok()
         .filter(|key| !key.trim().is_empty())
         .map(|key| Box::new(Sarvam::new(client.clone(), key)) as Box<dyn Summarizer>);
+    let has_summarizer = summarizer.is_some();
 
-    let app = App {
-        client: client.clone(),
-        enrich: enrich::Config {
+    let pipeline = Pipeline::new(
+        client.clone(),
+        enrich::Config {
             max_chars: env_parse("SUMMARY_MAX_CHARS", 1024),
-            base_url: url.clone(),
+            base_url,
         },
         summarizer,
-    };
+        Box::new(LogDeliverer),
+    );
 
     info!(
         %url,
         interval_secs = interval.as_secs(),
-        summarizer = app.summarizer.is_some(),
+        summarizer = has_summarizer,
         "starting isro-notifications"
     );
 
@@ -55,7 +52,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     loop {
         tokio::select! {
-            _ = tick.tick() => poll_once(&mut fetcher, &app).await,
+            _ = tick.tick() => {
+                pipeline.handle(fetcher.poll().await).await;
+            }
             _ = shutdown() => {
                 info!("shutdown signal received");
                 break;
@@ -64,29 +63,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     }
 
     Ok(())
-}
-
-async fn poll_once(fetcher: &mut Fetcher, app: &App) {
-    match fetcher.poll().await {
-        FetchEvent::Baseline { checksum } => info!(%checksum, "baseline snapshot stored"),
-        FetchEvent::Unchanged { checksum } => debug!(%checksum, "no change"),
-        FetchEvent::Changed { previous, current } => {
-            debug!(from = %previous.checksum, to = %current.checksum, "page changed");
-            match diff::compare(&previous.body, &current.body, &app.enrich.base_url) {
-                DiffEvent::Failure { message } => error!(%message, "site failure"),
-                DiffEvent::NoNews => info!("page changed but no new news"),
-                DiffEvent::News { items } => {
-                    let updates =
-                        enrich::enrich(&app.client, &items, &app.enrich, app.summarizer.as_deref())
-                            .await;
-                    for update in &updates {
-                        info!("{}", update);
-                    }
-                }
-            }
-        }
-        FetchEvent::Failed { error } => error!(%error, "fetch failed"),
-    }
 }
 
 fn env_parse<T: std::str::FromStr>(key: &str, default: T) -> T {
